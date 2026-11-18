@@ -14,13 +14,14 @@ constexpr uint64_t boot = 0x123456789abcdef0ULL;
 
 class Visit final : public VisitBackend {
 public:
-    bool start(const Target&) override {
+    uint64_t nowUs() const override { return 0; }
+    VisitStart start(const Target&, const VisitBudget&) override {
         assert(!receiving);
         ++starts;
         done = false;
         result = Outcome::none;
         receiving = radioStarts;
-        return radioStarts;
+        return radioStarts ? VisitStart::listening : VisitStart::radio_error;
     }
     bool observationDone() const override { return done; }
     bool stopReception() override {

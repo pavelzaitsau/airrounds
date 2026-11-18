@@ -87,7 +87,7 @@ Session IDs and mutation request IDs do not wrap within a boot.
 | State | Result | Meaning |
 | --- | --- | --- |
 | `idle` | `none` | The board has not accepted a visit since boot. |
-| `running` | `none` | The board is listening. The visit ends after one beacon or 5 s. |
+| `running` | `none` | The board is listening. See [observation windows](#observation-windows) for the limits. |
 | `finalizing` | `none` | Reception has stopped. The save result is pending. |
 | `complete` or `stopped` | `saved` or `not_observed` | The visit ended on its own or by request. A saved PCAP has a verified receipt. A visit without a beacon produces no file. |
 | `error` | `radio_error` or `storage_error` | The radio or storage operation failed. |
@@ -109,11 +109,11 @@ Use these commands when the board advertises feature bit 1.
 | `round_status` | Zero or current session ID | Read the current round and its results. Use a read request ID, as for `status`. |
 
 The board rejects an empty list and a repeated BSSID. A retry for the current
-session uses the same pairs in the same order. The board visits each pair
-once. If a point moves to a different channel, the board still listens on
-the channel in the request. It reports `not_observed` if it hears no matching
-beacon in 5 s, then moves to the next point. A radio or storage error ends the
-round.
+session uses the same pairs in the same order. The board visits the pairs
+in order until the round deadline. If a point moves to a different channel,
+the board still listens on the channel in the request. It reports
+`not_observed` if it hears no matching beacon before the visit cutoff.
+A radio or storage error ends the round.
 
 The round commands append `aps` to the reply, followed by one field per
 access point in visit order. Each field has 15 lowercase hex digits. The
@@ -124,7 +124,7 @@ no beacon on channel 11.
 
 | Last digit | Visit result |
 | --- | --- |
-| `0` | No result yet. The first such point is active while the round runs or saves. After a stop or error, remaining points were skipped. |
+| `0` | No result yet. The first such point is active while the round runs or saves. After a stop, deadline, or error, remaining points were skipped. |
 | `1` | `not_observed` |
 | `2` | `saved` |
 | `3` | `radio_error` |
@@ -139,6 +139,21 @@ On the card, a multi-point round uses `visit-<boot>-<session>-<slot>.pcap`.
 Slots start at 1 and follow the request order. Use the matching `.pcap.ok`
 receipt for each file. A round with one point uses the original file name.
 
+## Observation windows
+
+Both `start` and `round` use the same listening limits. A visit starts with
+up to 5 s and can extend to 7 s for new observations. The round deadline
+is 10 s per point, measured from the time the board accepts the round.
+See the [ESP32 guide](../firmware/esp32/README.md#run-a-round-over-uart)
+for the rule that decides when an observation is new.
+
+The board can save a beacon after the deadline if it accepted the beacon
+before the deadline. If the deadline prevents another visit from starting,
+the board reports `stopped` and the unvisited points keep result digit `0`.
+A round that reaches every point can report `complete` after the final save.
+If setup for the first point reaches the deadline before listening starts,
+the board reports `radio_error`.
+
 ## Retry and reconnect
 
 Send one mutation at a time. If its reply is missing, resend the same
@@ -151,7 +166,8 @@ On reconnect, send a fresh `hello`. Read `last_mutation` before choosing the
 next mutation ID. Keep track of the highest ID you sent during the same
 board boot. Use an ID above both values for a new command. Send a new
 `status` request to recover a lost result.
-If UART drops while a round runs, the board finishes its scheduled visits.
+If UART drops while a round runs, the board follows the same schedule and
+deadline.
 After reboot, the board starts idle under a new boot ID.
 
 For each reply, check the version, boot, request ID, and echoed scope before

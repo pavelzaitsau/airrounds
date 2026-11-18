@@ -122,6 +122,97 @@ void testFilteredCapture(const std::string& directory) {
     require(visit.savedPcapSize() == expected.size(), "report the verified file length");
 }
 
+void testObservationWindow(const std::string& directory) {
+    constexpr uint64_t base = 5000000;
+    constexpr uint64_t tail = 1000000;
+    constexpr uint64_t limit = 7000000;
+    PassiveSession visit;
+    require(visit.startAdaptive(target, limit) == StartResult::started, "start an adaptive visit");
+
+    visit.receive(beacon.data(), beacon.size(), target.channel, base - 1);
+    require(visit.hasSample() && !visit.observationDone(base),
+            "a late first beacon extends the visit");
+
+    auto repeat = beacon;
+    repeat[22] = 0xf0; // Sequence number.
+    repeat[24] = 123;  // Beacon timestamp.
+    repeat[41] = 0x84;
+    visit.receive(repeat.data(), repeat.size(), target.channel, base + tail - 2);
+    require(visit.observationDone(base + tail - 1),
+            "sequence, timestamp and rate changes do not extend the visit");
+
+    visit.reset();
+    require(visit.startAdaptive(target, limit) == StartResult::started,
+            "reset the novelty history");
+    visit.receive(beacon.data(), beacon.size(), target.channel, 1);
+    require(!visit.observationDone(base - 1), "an early beacon leaves the base window in place");
+    auto renamed = beacon;
+    renamed[38] = 'X';
+    visit.receive(renamed.data(), renamed.size(), target.channel, base - 1);
+    require(!visit.observationDone(base), "a new SSID extends the visit");
+    visit.receive(beacon.data(), beacon.size(), target.channel, base + tail - 2);
+    require(visit.observationDone(base + tail - 1), "a return to an older value does not extend");
+
+    const auto path = directory + "/adaptive.pcap";
+    require(visit.finish(path.c_str()) == VisitState::saved, "save an adaptive visit");
+    std::ifstream input(path, std::ios::binary);
+    input.seekg(40);
+    const std::vector<uint8_t> saved{std::istreambuf_iterator<char>(input), {}};
+    require(saved.size() == beacon.size() &&
+                std::equal(beacon.begin(), beacon.end(), saved.begin()),
+            "a later observation does not replace the first beacon");
+
+    visit.reset();
+    require(visit.startAdaptive(target, limit) == StartResult::started,
+            "start a visit for changes");
+    visit.receive(beacon.data(), beacon.size(), target.channel, base - 1);
+    auto rescheduled = beacon;
+    rescheduled[32] = 102;
+    visit.receive(rescheduled.data(), rescheduled.size(), target.channel, base + tail - 2);
+    require(!visit.observationDone(base + tail), "a new beacon interval extends the visit");
+    auto capabilities = rescheduled;
+    capabilities[34] = 0x11;
+    visit.receive(capabilities.data(), capabilities.size(), target.channel, limit - 10);
+    require(!visit.observationDone(limit - 1), "a new capability can extend to the hard limit");
+    require(visit.observationDone(limit), "continued changes cannot exceed the hard limit");
+}
+
+void testObservationBounds() {
+    constexpr uint64_t base = 5000000;
+    PassiveSession visit;
+    require(visit.startAdaptive(target, 3000000) == StartResult::started,
+            "start a shortened visit");
+    visit.receive(beacon.data(), beacon.size(), target.channel, 2999999);
+    require(visit.hasSample() && visit.observationDone(3000000), "respect the shorter round share");
+
+    visit.reset();
+    require(visit.startAdaptive(target, base + 2000000) == StartResult::started,
+            "start a quiet visit");
+    auto neighbor = beacon;
+    neighbor[15] = other.bssid[5];
+    neighbor[21] = other.bssid[5];
+    visit.receive(neighbor.data(), neighbor.size(), target.channel, base - 2);
+    visit.receive(beacon.data(), beacon.size() - 1, target.channel, base - 2);
+    visit.receive(beacon.data(), beacon.size(), 11, base - 2);
+    visit.receive(beacon.data(), beacon.size(), target.channel, base);
+    require(!visit.hasSample() && visit.observationDone(base),
+            "ignore invalid, off-target and late frames");
+
+    visit.reset();
+    require(visit.startAdaptive(target, base + 2000000) == StartResult::started,
+            "start a busy visit");
+    auto changes = beacon;
+    for (uint8_t interval = 100; interval < 104; ++interval) {
+        changes[32] = interval;
+        visit.receive(changes.data(), changes.size(), target.channel, interval);
+    }
+    changes[32] = 104;
+    visit.receive(changes.data(), changes.size(), target.channel, base - 2);
+    visit.receive(beacon.data(), beacon.size(), target.channel, base - 1);
+    require(visit.observationDone(base),
+            "a full history does not forget repeats or extend further");
+}
+
 void testCaptureAcrossBlocks(const std::string& directory) {
     const auto path = directory + "/large-beacon.pcap";
     std::vector<uint8_t> large(beacon.begin(), beacon.end());
@@ -194,6 +285,8 @@ int main(int argc, char** argv) try {
     testBeaconDiscovery();
     testEmptyList(argv[1]);
     testFilteredCapture(argv[1]);
+    testObservationWindow(argv[1]);
+    testObservationBounds();
     testCaptureAcrossBlocks(argv[1]);
     testQuietAndWriteFailure(argv[1]);
     testResetAfterSave(argv[1]);

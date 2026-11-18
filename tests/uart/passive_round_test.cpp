@@ -41,18 +41,27 @@ class Visit final : public VisitBackend {
 public:
     explicit Visit(const char* directory) : directory_(directory) {}
 
-    bool start(const Target& target) override {
+    uint64_t nowUs() const override { return now_; }
+
+    VisitStart start(const Target& target, const VisitBudget& budget) override {
         assert(!receiving_);
+        ++setupCount;
+        now_ += setupDelayUs;
+        setupDelayUs = 0;
+        const auto shareUs = budget.shareAt(now_);
+        if (shareUs == 0) {
+            return VisitStart::deadline;
+        }
         visit_.reset();
         result_ = Outcome::none;
-        elapsed_ = 0;
-        receiving_ = visit_.start(&target, 1) == session::StartResult::started;
-        return receiving_;
+        startedUs_ = now_;
+        const auto started = visit_.startAdaptive(target, shareUs);
+        assert(started == session::StartResult::started);
+        receiving_ = true;
+        return VisitStart::listening;
     }
 
-    bool observationDone() const override {
-        return visit_.hasSample() || elapsed_ >= PassiveSession::windowUs;
-    }
+    bool observationDone() const override { return visit_.observationDone(now_ - startedUs_); }
 
     bool stopReception() override {
         assert(receiving_);
@@ -75,15 +84,19 @@ public:
         }
     }
 
-    Outcome saveResult() const override { return result_; }
+    Outcome saveResult() const override { return holdSave ? Outcome::none : result_; }
 
-    void receive(const Target& target, uint64_t elapsed = 1) {
+    void receive(const Target& target) {
         assert(receiving_);
         const auto frame = beacon(target);
-        visit_.receive(frame.data(), frame.size(), target.channel, elapsed);
+        visit_.receive(frame.data(), frame.size(), target.channel, now_ - startedUs_);
     }
 
-    void expire() { elapsed_ = PassiveSession::windowUs; }
+    void advance(uint64_t us) { now_ += us; }
+    void expire() { now_ = startedUs_ + PassiveSession::windowUs; }
+    bool holdSave = false;
+    uint64_t setupDelayUs = 0;
+    unsigned setupCount = 0;
     uint8_t channel() const { return visit_.channel(); }
     bool hasSample() const { return visit_.hasSample(); }
 
@@ -99,7 +112,8 @@ public:
 private:
     std::string directory_;
     PassiveSession visit_;
-    uint64_t elapsed_ = 0;
+    uint64_t now_ = 0;
+    uint64_t startedUs_ = 0;
     bool receiving_ = false;
     Outcome result_ = Outcome::none;
 };
@@ -136,7 +150,14 @@ void checkRound(const char* directory, uint32_t sessionId,
 
     visit.receive(second);
     assert(!visit.hasSample());
+    visit.advance(4999999);
     visit.receive(first);
+    visit.advance(1);
+    round.poll();
+    checkActive(round, visit, 0);
+    visit.advance(999998);
+    visit.receive(first);
+    visit.advance(1);
     round.poll();
     checkActive(round, visit, 1);
     assert(round.status().results[0] == Outcome::saved);
@@ -149,10 +170,11 @@ void checkRound(const char* directory, uint32_t sessionId,
     assert(round.status().next() == 1);
     if (available) {
         visit.receive(second);
-    } else {
-        visit.receive(second, PassiveSession::windowUs);
+    }
+    visit.expire();
+    if (!available) {
+        visit.receive(second);
         assert(!visit.hasSample());
-        visit.expire();
     }
     round.poll();
     checkActive(round, visit, 2);
@@ -161,7 +183,7 @@ void checkRound(const char* directory, uint32_t sessionId,
     visit.receive(first);
     assert(!visit.hasSample());
     visit.receive(third);
-    round.poll();
+    visit.expire();
     round.poll();
     assert(round.state() == State::complete && round.outcome() == Outcome::saved);
     assert(round.status().next() == 3 && round.status().results[2] == Outcome::saved);
@@ -200,6 +222,90 @@ void checkQuietRound(const char* directory) {
     }
 }
 
+void checkRoundDeadline(const char* directory, bool canStartNextVisit) {
+    const Target third{{2, 0, 0, 0, 0, 3}, 11};
+    session::Profile profile;
+    const bool valid = profile.add(first) && profile.add(quietSecond) && profile.add(third);
+    assert(valid);
+    Visit visit(directory);
+    PassiveRound round(visit);
+    const VisitId id{boot, canStartNextVisit ? 5U : 6U};
+    const bool started = round.start(id, profile);
+    assert(started);
+
+    visit.receive(first);
+    visit.holdSave = true;
+    visit.expire();
+    round.poll();
+    assert(round.state() == State::finalizing);
+
+    visit.advance(canStartNextVisit ? 17000000U : 25000000U);
+    round.poll();
+    assert(round.state() == State::finalizing);
+    visit.holdSave = false;
+    visit.setupDelayUs = 2000000;
+    round.poll();
+    assert(round.status().results[0] == Outcome::saved);
+    checkFile(visit.path({id, 1}), first);
+
+    if (!canStartNextVisit) {
+        assert(round.state() == State::stopped && round.outcome() == Outcome::saved);
+        assert(visit.setupCount == 1);
+        assert(round.status().results[1] == Outcome::none);
+        assert(round.status().results[2] == Outcome::none);
+        const bool restarted = round.start({boot, 7}, profile);
+        assert(restarted);
+        checkActive(round, visit, 0);
+        return;
+    }
+
+    // Two points share the six seconds left after the save and radio setup.
+    checkActive(round, visit, 1);
+    visit.advance(2999999);
+    round.poll();
+    checkActive(round, visit, 1);
+    visit.receive(quietSecond);
+    visit.advance(1);
+    round.poll();
+    checkActive(round, visit, 2);
+    assert(round.status().results[1] == Outcome::saved);
+    visit.advance(3000000);
+    visit.receive(third);
+    assert(!visit.hasSample());
+    round.poll();
+    assert(round.state() == State::complete && round.outcome() == Outcome::saved);
+    assert(round.status().results[2] == Outcome::not_observed);
+    checkFile(visit.path({id, 2}), quietSecond);
+}
+
+void checkSetupDeadline(const char* directory) {
+    const Target third{{2, 0, 0, 0, 0, 3}, 11};
+    session::Profile profile;
+    const bool valid = profile.add(first) && profile.add(quietSecond) && profile.add(third);
+    assert(valid);
+    Visit visit(directory);
+    PassiveRound round(visit);
+    const bool started = round.start({boot, 8}, profile);
+    assert(started);
+    visit.expire();
+    round.poll();
+    checkActive(round, visit, 1);
+
+    visit.setupDelayUs = 20000000;
+    visit.expire();
+    round.poll();
+    assert(round.state() == State::stopped && round.outcome() == Outcome::not_observed);
+    assert(round.status().results[0] == Outcome::not_observed);
+    assert(round.status().results[1] == Outcome::not_observed);
+    assert(round.status().results[2] == Outcome::none);
+
+    visit.setupDelayUs = 30000000;
+    const bool restarted = round.start({boot, 9}, profile);
+    assert(restarted);
+    assert(round.state() == State::error && round.outcome() == Outcome::radio_error);
+    assert(round.status().results[0] == Outcome::radio_error);
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -208,7 +314,10 @@ int main(int argc, char** argv) try {
     checkRound(argv[1], 2, {1, 11}, true);
     checkRound(argv[1], 3, {6, 11}, false);
     checkQuietRound(argv[1]);
-    std::cout << "Passive round: shared channel, channel change, and quiet visits passed\n";
+    checkRoundDeadline(argv[1], true);
+    checkRoundDeadline(argv[1], false);
+    checkSetupDeadline(argv[1]);
+    std::cout << "Passive round: visit order, extensions, and round deadline passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

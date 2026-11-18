@@ -25,11 +25,12 @@ using namespace airrounds::uart;
 
 class Receiver final : public VisitBackend {
 public:
-    bool start(const airrounds::session::Target&) override {
+    uint64_t nowUs() const override { return static_cast<uint64_t>(emu::clockMs) * 1000U; }
+    VisitStart start(const airrounds::session::Target&, const VisitBudget&) override {
         ++visits;
         observed = false;
         outcome = Outcome::none;
-        return true;
+        return VisitStart::listening;
     }
     bool observationDone() const override { return observed; }
     bool stopReception() override { return true; }

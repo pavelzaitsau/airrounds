@@ -75,13 +75,16 @@ if storage fails.
 
 ## Observation windows
 
-Start with fixed windows. Set limits on the visit count, time per visit, and
-total session time. Reject zero, overflowing, or conflicting settings. If an
-access point disappears or its time runs out, move on and record why.
+T8 visits points in profile order until the round deadline. Each visit starts
+with up to 5 s to accept beacons. A new combination of SSID bytes, beacon
+interval, and capability flags can extend the window. Repeats leave the
+cutoff in place. Both the 7 s visit cap and the round deadline limit the
+cutoff. The round gets 10 s per selected point. The board shares the remaining
+time among points still to visit.
 
-After T6, T8 can extend a visit for new diagnostic observations. Repeated
-observations do not reset the timer. Keep the absolute limits and give the
-other access points their turns.
+The board can finish a save after the round deadline. The
+[ESP32 guide](../firmware/esp32/README.md#run-a-round-over-uart) describes
+the limits and what happens when a visit uses its time.
 
 ## Storage and UART
 

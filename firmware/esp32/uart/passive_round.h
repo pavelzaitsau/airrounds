@@ -10,10 +10,34 @@ struct CaptureId {
     unsigned slot; // Zero keeps the filename used for a single visit.
 };
 
+struct RoundBudget {
+    uint64_t startedUs;
+    uint64_t durationUs;
+
+    uint64_t remainingAt(uint64_t nowUs) const {
+        const uint64_t elapsedUs = nowUs - startedUs;
+        return elapsedUs < durationUs ? durationUs - elapsedUs : 0;
+    }
+};
+
+struct VisitBudget {
+    RoundBudget round;
+    size_t remainingVisits;
+
+    uint64_t shareAt(uint64_t nowUs) const {
+        const auto remainingUs = round.remainingAt(nowUs);
+        // Round up so any time left gives the current point a positive share.
+        return remainingUs / remainingVisits + (remainingUs % remainingVisits != 0 ? 1U : 0U);
+    }
+};
+
+enum class VisitStart { listening, deadline, radio_error };
+
 class VisitBackend {
 public:
     virtual ~VisitBackend() = default;
-    virtual bool start(const session::Target& target) = 0;
+    virtual uint64_t nowUs() const = 0;
+    virtual VisitStart start(const session::Target& target, const VisitBudget& budget) = 0;
     virtual bool observationDone() const = 0;
     virtual bool stopReception() = 0;
     virtual void beginSave(const CaptureId& id) = 0;
@@ -34,6 +58,7 @@ public:
         current_ = 0;
         stopRequested_ = false;
         anySaved_ = false;
+        budget_ = {visit_.nowUs(), profile.size() * visitBudgetUs};
         startCurrent();
         return true;
     }
@@ -50,7 +75,8 @@ public:
     }
 
     void poll() {
-        if (state_ == State::running && visit_.observationDone()) {
+        if (state_ == State::running &&
+            (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone())) {
             endObservation();
         } else if (state_ == State::finalizing) {
             updateSaveResult();
@@ -62,13 +88,33 @@ public:
     const RoundStatus& status() const { return status_; }
 
 private:
+    // Allow up to 7 seconds for listening plus time for radio setup and storage.
+    static constexpr uint64_t visitBudgetUs = 10000000;
+
     void startCurrent() {
-        if (visit_.start(status_.profile[current_])) {
+        const auto remainingVisits = status_.profile.size() - current_;
+        switch (visit_.start(status_.profile[current_], {budget_, remainingVisits})) {
+        case VisitStart::listening:
             state_ = State::running;
             outcome_ = Outcome::none;
-        } else {
+            break;
+        case VisitStart::deadline:
+            if (current_ != 0) {
+                finish(State::stopped);
+            } else {
+                // UART clients expect at least one result in a stopped round.
+                fail(Outcome::radio_error);
+            }
+            break;
+        case VisitStart::radio_error:
             fail(Outcome::radio_error);
+            break;
         }
+    }
+
+    void finish(State finalState) {
+        state_ = finalState;
+        outcome_ = anySaved_ ? Outcome::saved : Outcome::not_observed;
     }
 
     void fail(Outcome result) {
@@ -99,16 +145,17 @@ private:
         }
         status_.results[current_++] = result;
         anySaved_ = anySaved_ || result == Outcome::saved;
-        if (!stopRequested_ && current_ < status_.profile.size()) {
+        const bool moreVisits = current_ < status_.profile.size();
+        if (!stopRequested_ && moreVisits && budget_.remainingAt(visit_.nowUs()) != 0) {
             startCurrent();
             return;
         }
-        state_ = stopRequested_ ? State::stopped : State::complete;
-        outcome_ = anySaved_ ? Outcome::saved : Outcome::not_observed;
+        finish(stopRequested_ || moreVisits ? State::stopped : State::complete);
     }
 
     VisitBackend& visit_;
     VisitId id_{};
+    RoundBudget budget_{};
     RoundStatus status_;
     size_t current_ = 0;
     bool stopRequested_ = false;

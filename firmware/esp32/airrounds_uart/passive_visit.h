@@ -27,20 +27,24 @@ public:
         return visit;
     }
 
-    bool start(const session::Target& target) override {
-        if (radioFault_) {
-            return false;
+    uint64_t nowUs() const override { return static_cast<uint64_t>(esp_timer_get_time()); }
+
+    VisitStart start(const session::Target& target, const VisitBudget& budget) override {
+        if (budget.round.remainingAt(nowUs()) == 0) {
+            return VisitStart::deadline;
+        }
+        if (radioFault_ || !openRadio()) {
+            return VisitStart::radio_error;
         }
         visit_.reset();
-        if (visit_.start(&target, 1) != session::StartResult::started || !openRadio()) {
-            return false;
-        }
-        return tuneAndListen(target.channel);
+        return tuneAndListen(target, budget);
     }
 
     bool observationDone() const override {
-        return visit_.hasSample() ||
-               esp_timer_get_time() - startedUs_ >= session::PassiveSession::windowUs;
+        portENTER_CRITICAL(&receiveLock_);
+        const bool done = visit_.observationDone(nowUs() - startedUs_);
+        portEXIT_CRITICAL(&receiveLock_);
+        return done;
     }
 
     bool stopReception() override {
@@ -84,7 +88,7 @@ private:
         auto& self = instance();
         portENTER_CRITICAL(&self.receiveLock_);
         if (self.listening_) {
-            const auto elapsed = static_cast<uint64_t>(esp_timer_get_time() - self.startedUs_);
+            const auto elapsed = self.nowUs() - self.startedUs_;
             self.visit_.receive(packet->payload, packet->rx_ctrl.sig_len - fcsSize,
                                 packet->rx_ctrl.channel, elapsed);
         }
@@ -113,26 +117,41 @@ private:
         return false;
     }
 
-    bool tuneAndListen(uint8_t channel) {
+    VisitStart tuneAndListen(const session::Target& target, const VisitBudget& budget) {
+        const auto channel = target.channel;
         uint8_t actualChannel = 0;
         wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
         if (esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE) != ESP_OK ||
             esp_wifi_get_channel(&actualChannel, &secondary) != ESP_OK ||
             actualChannel != channel || secondary != WIFI_SECOND_CHAN_NONE) {
             closeRadio(true);
-            return false;
+            return VisitStart::radio_error;
         }
-        const int64_t now = esp_timer_get_time();
-        portENTER_CRITICAL(&receiveLock_);
-        startedUs_ = now;
-        listening_ = true;
-        portEXIT_CRITICAL(&receiveLock_);
-
+        if (budget.round.remainingAt(nowUs()) == 0) {
+            closeRadio(true);
+            return radioFault_ ? VisitStart::radio_error : VisitStart::deadline;
+        }
         if (esp_wifi_set_promiscuous(true) != ESP_OK) {
             stopReception();
-            return false;
+            return VisitStart::radio_error;
         }
-        return true;
+
+        // The callback ignores frames until setup finishes and the window is armed.
+        portENTER_CRITICAL(&receiveLock_);
+        const auto now = nowUs();
+        const auto shareUs = budget.shareAt(now);
+        const bool started =
+            shareUs != 0 && visit_.startAdaptive(target, shareUs) == session::StartResult::started;
+        if (started) {
+            startedUs_ = now;
+            listening_ = true;
+        }
+        portEXIT_CRITICAL(&receiveLock_);
+        if (!started) {
+            const bool stopped = stopReception();
+            return shareUs == 0 && stopped ? VisitStart::deadline : VisitStart::radio_error;
+        }
+        return VisitStart::listening;
     }
 
     void closeRadio(bool started) {
@@ -172,8 +191,8 @@ private:
     }
 
     session::PassiveSession visit_;
-    portMUX_TYPE receiveLock_ = portMUX_INITIALIZER_UNLOCKED;
-    int64_t startedUs_ = 0;
+    mutable portMUX_TYPE receiveLock_ = portMUX_INITIALIZER_UNLOCKED;
+    uint64_t startedUs_ = 0;
     bool listening_ = false;
     bool radioFault_ = false;
     CaptureId savedVisit_{};

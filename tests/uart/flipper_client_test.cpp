@@ -17,12 +17,13 @@ constexpr uint64_t boot = 0x123456789abcdef0ULL;
 
 class Visit final : public VisitBackend {
 public:
-    bool start(const airrounds::session::Target& selected) override {
+    uint64_t nowUs() const override { return 0; }
+    VisitStart start(const airrounds::session::Target& selected, const VisitBudget&) override {
         assert(airrounds::session::validTarget(selected));
         ++starts;
         done = false;
         outcome = Outcome::none;
-        return true;
+        return VisitStart::listening;
     }
     bool observationDone() const override { return done; }
     bool stopReception() override {

@@ -337,6 +337,67 @@ copy, then restored and verified the original ESP32 image.
 The local `artifacts/t6/flipper-hardware/reviewed/` folder holds the screen
 images, memory samples, UART replies, PCAPs, and receipts.
 
+## Observation windows T8
+
+`make test` uses synthetic beacons and a fake clock. It checks that sequence
+numbers, timestamps, other changing fields, and a return to an earlier
+value leave the cutoff in place. A new SSID, interval, or capability can
+extend the visit. A full history, an invalid beacon, and a frame at the
+cutoff cannot extend it.
+
+The round tests check that an extension leaves time for the other points
+and that each point gets its own result. They delay radio setup and saves
+to check shorter visits and expiration. A save that crosses the deadline
+keeps its result. A point that never started listening after an earlier
+visit stays unvisited.
+
+### T8 bench results
+
+On November 18, 2026, a Mac ran T8 rounds over USB on an ESP32-S2
+Wi-Fi Devboard with a microSD card. The board used its own clock, radio
+setup, and SD writer. For the timing cases, the test passed synthetic
+beacons in memory to the normal receive callback. It changed sequence
+numbers and timestamps on repeats. The callback applies the receive
+cutoff. The measured window ends when the main loop starts to shut down
+the radio, which can be slightly later.
+
+| Visit | Channel | Beacon times after listening began | Measured window | Result |
+| --- | --- | --- | --- | --- |
+| 1 | 1 | First at 0.100 s. Repeat at 4.800 s. | 5.000 s | Saved |
+| 2 | 6 | First at 4.801 s. Repeat at 5.601 s. | 5.802 s | Saved |
+| 3 | 11 | First at 4.801 s. New SSID at 5.651 s. New interval at 6.501 s. Earlier values at 6.901 s. | 7.001 s | Saved |
+
+The first repeat left the 5 s window in place. The second repeat left the
+extension from the first beacon in place. New values extended visit 3
+to the 7 s limit. The board visited all three points in order and saved
+the first beacon from each point.
+
+To reach the round deadline, the test held back the first save result
+until 22 s after the round started. The board still visited points 2 and
+3 in order. Their windows shortened to 3.998 s and 2.461 s. The receive
+callback rejected a beacon passed to it at 30.000559 s after the round
+started. The board started shutting down the radio at 30.000819 s. The round finished with
+**Saved**, **Saved**, and **No beacon** in visit order.
+
+The test then held a save result until 31 s. The Mac saw the round report
+`stopped` after 31.087 s. The first point kept its saved result. The other
+two points stayed unvisited.
+
+In a separate run, the board listened over the air to the three access
+points from the T6 bench, on channels 11, 4, and 1. Each point had a
+5.001 s window and saved one beacon. The Mac saw the round finish in
+19.015 s, including radio setup and card writes.
+
+The [Mac checker][mac-checker] matched all nine PCAPs to their access
+points and receipts. `tcpdump` read one beacon from each file.
+
+The first bench build did not show a USB port after reset. A second
+build used the T6 startup pattern and ran all four cases. The board's
+original flash was restored, checked against the full 4 MiB backup, and
+reset. The local `artifacts/t8/hardware/` folder holds the timing log,
+the flash logs, and the PCAPs with their receipts. The flash log records
+the SHA-256 of the tested image.
+
 [mac-checker]: ../tools/mac/README.md
 
 [flipper-app]: ../flipper/README.md

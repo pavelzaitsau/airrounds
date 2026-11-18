@@ -92,12 +92,27 @@ Build the `airrounds_uart` sketch with `make embedded`. The image is under
 `artifacts/quality/esp32/airrounds_uart/`. It listens on the Devboard's UART
 pins and writes captures to the microSD card.
 
-The board copies the profile when it accepts a round. It visits each BSSID
-once, on the channel in the profile. Points on the same channel have separate
-visits. Each visit ends after a matching beacon or 5 s of listening. A round
-with three points spends up to 15 s listening, plus radio setup and SD time.
+The board copies the profile when it accepts a round. It visits BSSIDs
+in order on the channels in the profile, up to the round deadline.
+Points on the same channel have separate visits. The board keeps the first
+valid beacon from each point for its PCAP.
 
-The board closes and checks a capture before starting the next visit.
+A visit starts with up to 5 s of listening. A valid beacon is new if its
+SSID bytes, beacon interval, and capability flags form a combination the
+visit has never seen. The first valid beacon counts. Sequence numbers,
+timestamps, and other fields do not count. The board remembers up to four
+combinations per visit. Once that list is full, no further beacon can
+extend the visit.
+
+A new observation can move the receive cutoff to one second after the
+callback sees the beacon. The cutoff stays within 7 s of the start of
+listening. After each radio setup, the board divides the time left by
+the number of points still to visit. The current point gets at most
+that share. Slow setup or saves can shorten later visits.
+
+The round deadline is 10 s per selected point from the start of the
+round. At the deadline, the board stops accepting beacons and starts no
+more visits. It closes and checks any capture already in hand.
 A quiet point produces no file. A radio or SD error ends the round.
 Earlier save results stay available in UART status until the next round
 or a reboot. The PCAP files and receipts stay on the card.

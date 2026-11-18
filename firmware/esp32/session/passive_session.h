@@ -92,7 +92,12 @@ private:
 
 class PassiveSession {
 public:
-    enum : uint32_t { windowUs = 5000000, maxFrameSize = maxBeaconSize };
+    enum : uint32_t {
+        windowUs = 5000000,
+        extensionUs = 1000000,
+        maxAdaptiveWindowUs = 7000000,
+        maxFrameSize = maxBeaconSize
+    };
 
     StartResult start(const Target* targets, size_t count) {
         if (state_ != VisitState::idle) {
@@ -109,18 +114,39 @@ public:
         return StartResult::started;
     }
 
-    // One radio task calls receive. Stop that task's delivery before calling finish.
+    StartResult startAdaptive(const Target& target, uint64_t budgetUs) {
+        const auto result = start(&target, 1);
+        if (result == StartResult::started) {
+            adaptive_ = true;
+            limitUs_ = budgetUs < maxAdaptiveWindowUs ? static_cast<uint32_t>(budgetUs)
+                                                      : maxAdaptiveWindowUs;
+            deadlineUs_ = limitUs_ < windowUs ? limitUs_ : windowUs;
+        }
+        return result;
+    }
+
+    bool observationDone(uint64_t elapsedUs) const {
+        return elapsedUs >= deadlineUs_ || (!adaptive_ && hasSample());
+    }
+
+    // Serialize receive and observationDone. Stop delivery before calling finish.
     void receive(const uint8_t* frame, size_t size, uint8_t receivedChannel, uint64_t elapsedUs) {
         BeaconView beacon;
-        if (state_ != VisitState::observing || hasSample() || receivedChannel != target_.channel ||
-            elapsedUs >= windowUs || !parseBeacon(receivedChannel, frame, size, beacon) ||
-            memcmp(beacon.bssid, target_.bssid, sizeof(target_.bssid)) != 0) {
+        if (state_ != VisitState::observing || observationDone(elapsedUs) ||
+            receivedChannel != target_.channel || frame == nullptr || size < 22 ||
+            memcmp(frame + 16, target_.bssid, sizeof(target_.bssid)) != 0 ||
+            !parseBeacon(receivedChannel, frame, size, beacon)) {
             return;
         }
-        memcpy(frame_, frame, size);
-        frameSize_ = size;
-        timestampUs_ = static_cast<uint32_t>(elapsedUs);
-        hasSample_.store(true, std::memory_order_release);
+        if (adaptive_) {
+            noteObservation(frame + 32, beacon, static_cast<uint32_t>(elapsedUs));
+        }
+        if (!hasSample()) {
+            memcpy(frame_, frame, size);
+            frameSize_ = size;
+            timestampUs_ = static_cast<uint32_t>(elapsedUs);
+            hasSample_.store(true, std::memory_order_release);
+        }
     }
 
     // Reset only after the radio detaches and any save has finished.
@@ -128,6 +154,9 @@ public:
         target_ = {};
         frameSize_ = 0;
         timestampUs_ = 0;
+        adaptive_ = false;
+        deadlineUs_ = windowUs;
+        observationCount_ = 0;
         hasSample_.store(false, std::memory_order_relaxed);
         state_ = VisitState::idle;
     }
@@ -150,6 +179,35 @@ public:
 private:
     static constexpr size_t pcapHeaderSize = 24;
     static constexpr size_t recordHeaderSize = 16;
+
+    struct Observation {
+        uint8_t parameters[4]; // Beacon interval and capability flags, in wire order.
+        uint8_t ssid[32];
+        size_t ssidSize;
+    };
+
+    void noteObservation(const uint8_t* parameters, const BeaconView& beacon, uint32_t elapsedUs) {
+        if (observationCount_ == observationCapacity || deadlineUs_ == limitUs_) {
+            return;
+        }
+        for (size_t i = 0; i < observationCount_; ++i) {
+            const auto& seen = observations_[i];
+            if (memcmp(seen.parameters, parameters, sizeof(seen.parameters)) == 0 &&
+                seen.ssidSize == beacon.ssidSize &&
+                memcmp(seen.ssid, beacon.ssid, beacon.ssidSize) == 0) {
+                return;
+            }
+        }
+        auto& observation = observations_[observationCount_++];
+        memcpy(observation.parameters, parameters, sizeof(observation.parameters));
+        memcpy(observation.ssid, beacon.ssid, beacon.ssidSize);
+        observation.ssidSize = beacon.ssidSize;
+
+        const uint32_t proposed = elapsedUs + extensionUs;
+        if (proposed > deadlineUs_) {
+            deadlineUs_ = proposed < limitUs_ ? proposed : limitUs_;
+        }
+    }
 
     static void writeLe32(uint8_t* field, uint32_t value) {
         for (size_t index = 0; index < sizeof(value); ++index) {
@@ -202,6 +260,12 @@ private:
         return result == storage::WriteStatus::complete;
     }
 
+    static constexpr size_t observationCapacity = 4;
+    Observation observations_[observationCapacity]{};
+    size_t observationCount_ = 0;
+    uint32_t deadlineUs_ = windowUs;
+    uint32_t limitUs_ = 0;
+    bool adaptive_ = false;
     Target target_{};
     VisitState state_ = VisitState::idle;
     std::atomic<bool> hasSample_{false};

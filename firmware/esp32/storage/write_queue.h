@@ -64,11 +64,15 @@ public:
             return failure_;
         }
         if (status == WriteStatus::complete) {
+            bytesWritten_ += block.size;
             accepted_ = 0;
             readIndex_.store(nextIndex(index), std::memory_order_release);
         }
         return status;
     }
+
+    // Only the consumer reads this count.
+    uint64_t bytesWritten() const { return bytesWritten_; }
 
     uint32_t overflowCount() const {
         return overflowCount_.load(std::memory_order_relaxed);
@@ -89,6 +93,7 @@ private:
     std::atomic<uint32_t> readIndex_{0};
     std::atomic<uint32_t> writeIndex_{0};
     std::atomic<uint32_t> overflowCount_{0};
+    uint64_t bytesWritten_ = 0;
     size_t accepted_ = 0;
     WriteStatus failure_ = WriteStatus::complete;
 };

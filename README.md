@@ -17,7 +17,12 @@ T0 starts with the source revisions and build tools. See the
 [development plan](docs/plan.md), [component map](docs/architecture.md), and
 [tool setup](docs/development.md).
 
-## Project skills
+## Quality checks and project skills
 
-The seven Copydesk skills live in [`.agents/skills/`](.agents/skills).
-Open a skill's `SKILL.md` for its workflow and tool requirements.
+Run `make check` for formatting, static analysis, host tests, and sanitizers.
+Run `make embedded` with the T0 SDKs to build and analyze the ESP32 and Flipper
+examples. See [quality checks](docs/quality.md) for setup, scope, and limitations.
+
+Project skills live in [`.agents/skills/`](.agents/skills). They include the seven
+Copydesk skills and the Trail of Bits `harness-writing`, `libfuzzer`, and
+`sharp-edges` skills. Open a skill's `SKILL.md` for its workflow and requirements.

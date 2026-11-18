@@ -1,0 +1,17 @@
+# Preserve the public enum representation; enum-size changes can break ABI.
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  -performance-enum-size,
+  readability-braces-around-statements,
+  readability-redundant-*,
+  readability-function-size,
+  readability-function-cognitive-complexity
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*(firmware/esp32/storage|tests/storage)/.*'
+CheckOptions:
+  readability-function-size.LineThreshold: '80'
+  readability-function-size.NestingThreshold: '4'
+  readability-function-cognitive-complexity.Threshold: '25'

@@ -77,7 +77,6 @@ public:
 
     uint32_t overflowCount() const { return overflowCount_.load(std::memory_order_relaxed); }
 
-
 private:
     struct Block {
         uint8_t data[MaxBlockSize];

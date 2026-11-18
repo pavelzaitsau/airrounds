@@ -16,11 +16,11 @@ using namespace airrounds::storage;
 namespace {
 
 // Classic PCAP with a single synthetic Ethernet frame.
+// NOLINTNEXTLINE(bugprone-throwing-static-initialization): Immutable host test fixture.
 const std::vector<uint8_t> sample{
-    0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0, 0,
-    1, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 0, 14, 0, 0, 0,
-    2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 2, 0x88, 0xb5,
+    0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0xff, 0xff,
+    0,    0,    1,    0,    0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0,    0,
+    14,   0,    0,    0,    2, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0,  2, 0x88, 0xb5,
 };
 
 void require(bool condition, const char* message) {
@@ -30,8 +30,7 @@ void require(bool condition, const char* message) {
     }
 }
 
-template <typename Capture>
-void enqueue(Capture& capture, const std::vector<uint8_t>& bytes) {
+template <typename Capture> void enqueue(Capture& capture, const std::vector<uint8_t>& bytes) {
     require(capture.enqueue(bytes.data(), bytes.size()) == EnqueueStatus::queued,
             "queue synthetic PCAP bytes");
 }
@@ -53,7 +52,8 @@ void testFinishAndNextFile(const std::string& directory) {
                 "queue remaining bytes");
         require(recoverPcap(first.c_str()) == CaptureState::incomplete,
                 "do not report saved before finalization");
-        require(capture.finish() == CaptureState::saved, "finish drains and checks the closed file");
+        require(capture.finish() == CaptureState::saved,
+                "finish drains and checks the closed file");
         require(capture.finish() == CaptureState::saved, "repeat finish is safe");
         require(capture.enqueue(sample.data(), 1) == EnqueueStatus::invalid,
                 "reject writes after finalization");
@@ -76,7 +76,7 @@ void testFinishAndNextFile(const std::string& directory) {
 
 void testInvalidPcapAndOverflow(const std::string& directory) {
     auto malformed = sample;
-    malformed[32] = 30;  // The record claims a payload longer than its original frame.
+    malformed[32] = 30; // The record claims a payload longer than its original frame.
     const std::vector<std::vector<uint8_t>> badInputs{
         {sample.begin(), sample.begin() + 12},
         {sample.begin(), sample.begin() + 24},
@@ -90,7 +90,8 @@ void testInvalidPcapAndOverflow(const std::string& directory) {
         require(capture.open(), "create malformed capture");
         enqueue(capture, badInputs[index]);
         require(capture.finish() == CaptureState::error, "reject malformed or empty PCAP");
-        require(recoverPcap(path.c_str()) == CaptureState::incomplete, "leave failed output unsealed");
+        require(recoverPcap(path.c_str()) == CaptureState::incomplete,
+                "leave failed output unsealed");
     }
 
     const auto overflow = directory + "/overflow.pcap";
@@ -99,7 +100,8 @@ void testInvalidPcapAndOverflow(const std::string& directory) {
     enqueue(capture, sample);
     require(capture.enqueue(sample.data(), 1) == EnqueueStatus::full, "drop one block");
     require(capture.finish() == CaptureState::incomplete, "overflow prevents publishing a capture");
-    require(recoverPcap(overflow.c_str()) == CaptureState::incomplete, "leave overflow output unsealed");
+    require(recoverPcap(overflow.c_str()) == CaptureState::incomplete,
+            "leave overflow output unsealed");
 }
 
 void testInterruptedProcess(const std::string& directory) {
@@ -112,7 +114,7 @@ void testInterruptedProcess(const std::string& directory) {
         require(capture.open(), "create interrupted capture");
         enqueue(capture, sample);
         require(capture.drainOne() == WriteStatus::complete, "write before restart");
-        _exit(0);  // Skip finalization and object cleanup.
+        _exit(0); // Skip finalization and object cleanup.
     }
 
     int childStatus = 0;
@@ -133,52 +135,79 @@ void testDamageAfterSave(const std::string& directory) {
     enqueue(capture, record);
     require(capture.finish() == CaptureState::saved, "finish before damage");
     auto corrupt = readFile(path);
-    corrupt.back() ^= 1;
+    corrupt.back() ^= 1U;
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
-        output.write(reinterpret_cast<const char*>(corrupt.data()), corrupt.size());
+        output.write(reinterpret_cast<const char*>(corrupt.data()),
+                     static_cast<std::streamsize>(corrupt.size()));
     }
     require(recoverPcap(path.c_str()) == CaptureState::error,
             "restart detects changed payload bytes even when the length matches");
-    require(truncate(path.c_str(), sample.size()) == 0, "drop one complete record");
+    require(truncate(path.c_str(), static_cast<off_t>(sample.size())) == 0,
+            "drop one complete record");
     require(recoverPcap(path.c_str()) == CaptureState::error,
             "restart detects truncation exactly at a record boundary");
 }
 
 struct FaultFile : SdFile {
-    enum Fault { none, zero_write, sync_data, close_data, reread, corrupt_read, sync_seal, close_seal,
-        seal_reread, publish_seal };
+    enum Fault {
+        none,
+        zero_write,
+        sync_data,
+        close_data,
+        reread,
+        corrupt_read,
+        sync_seal,
+        close_seal,
+        seal_reread,
+        publish_seal
+    };
     static Fault fault;
     bool writingSeal = false;
     bool writingData = false;
     bool readingSeal = false;
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     bool openNew(const char* path) {
         writingSeal = std::string(path).find(".ok.part") != std::string::npos;
         writingData = !writingSeal;
         return SdFile::openNew(path);
     }
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     bool openRead(const char* path) {
         readingSeal = std::string(path).find(".ok.part") != std::string::npos;
         return SdFile::openRead(path);
     }
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     size_t write(const uint8_t* bytes, size_t count) {
         return fault == zero_write && writingData ? 0 : SdFile::write(bytes, count);
     }
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     ssize_t read(uint8_t* bytes, size_t count) {
         if (fault == reread || (fault == seal_reread && readingSeal)) {
             return -1;
         }
         const auto got = SdFile::read(bytes, count);
         if (fault == corrupt_read && got == 14) {
-            bytes[got - 1] ^= 1;
+            bytes[got - 1] ^= 1U;
         }
         return got;
     }
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     bool sync() {
         if (fault == (writingSeal ? sync_seal : sync_data)) {
             return false;
@@ -186,12 +215,16 @@ struct FaultFile : SdFile {
         return SdFile::sync();
     }
 
+    // Fault injection uses static template dispatch, not virtual calls.
+    // cppcheck-suppress duplInheritedMember
+    // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     bool close() {
         const bool closed = SdFile::close();
         return closed && !(writingSeal && fault == close_seal) &&
                !(writingData && fault == close_data);
     }
 
+    // cppcheck-suppress duplInheritedMember
     static bool publish(const char* from, const char* to) {
         return fault != publish_seal && SdFile::publish(from, to);
     }
@@ -200,9 +233,10 @@ struct FaultFile : SdFile {
 FaultFile::Fault FaultFile::fault = FaultFile::none;
 
 void testFinalizationErrors(const std::string& directory) {
-    for (const auto fault : {FaultFile::zero_write, FaultFile::sync_data, FaultFile::close_data,
-                            FaultFile::reread, FaultFile::corrupt_read, FaultFile::sync_seal,
-                            FaultFile::close_seal, FaultFile::seal_reread, FaultFile::publish_seal}) {
+    for (const auto fault :
+         {FaultFile::zero_write, FaultFile::sync_data, FaultFile::close_data, FaultFile::reread,
+          FaultFile::corrupt_read, FaultFile::sync_seal, FaultFile::close_seal,
+          FaultFile::seal_reread, FaultFile::publish_seal}) {
         const auto path = directory + "/fault" + std::to_string(fault) + ".pcap";
         PcapCapture<1, 64, FaultFile> capture(path.c_str());
         require(capture.open(), "create fault case");
@@ -228,7 +262,7 @@ void testClassicFormats(const std::string& directory) {
         if (index % 2 != 0) {
             std::reverse(bytes.begin() + 4, bytes.begin() + 6);
             std::reverse(bytes.begin() + 6, bytes.begin() + 8);
-            for (size_t offset = 8; offset < 40; offset += 4) {
+            for (std::vector<uint8_t>::difference_type offset = 8; offset < 40; offset += 4) {
                 std::reverse(bytes.begin() + offset, bytes.begin() + offset + 4);
             }
         }
@@ -260,7 +294,8 @@ void testSealRecovery(const std::string& directory) {
     const auto good = readFile(seal);
     {
         std::ofstream output(stage, std::ios::binary);
-        output.write(reinterpret_cast<const char*>(good.data()), good.size());
+        output.write(reinterpret_cast<const char*>(good.data()),
+                     static_cast<std::streamsize>(good.size()));
     }
     require(recoverPcap(path.c_str()) == CaptureState::incomplete,
             "two seal names after an interrupted rename remain incomplete");
@@ -274,8 +309,9 @@ void testSealRecovery(const std::string& directory) {
     require(recoverPcap(path.c_str()) == CaptureState::error, "a seal alone is an error");
 }
 
-}  // namespace
+} // namespace
 
+// NOLINTNEXTLINE(bugprone-exception-escape): Allocation failure must fail this host test.
 int main(int argc, char** argv) {
     require(argc == 2, "pass an empty temporary directory");
     testFinishAndNextFile(argv[1]);

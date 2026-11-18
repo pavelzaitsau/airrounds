@@ -23,17 +23,17 @@ constexpr size_t sizeOffset = sizeof(sealMagic);
 constexpr size_t crcOffset = sizeOffset + sizeof(uint64_t);
 constexpr size_t sealSize = crcOffset + sizeof(uint32_t);
 
-template <typename Number>
-void writeLittle(uint8_t* output, Number value) {
+template <typename Number> void writeLittle(uint8_t* output, Number value) {
     for (size_t index = 0; index < sizeof(value); ++index) {
         output[index] = static_cast<uint8_t>(value);
-        value >>= 8;
+        value >>= 8U;
     }
 }
 
-template <typename File>
-class PcapOutput : public File {
+template <typename File> class PcapOutput : public File {
 public:
+    // Static template dispatch intentionally wraps File::write to update the CRC.
+    // cppcheck-suppress duplInheritedMember
     size_t write(const uint8_t* data, size_t size) {
         const auto written = File::write(data, size);
         if (written <= size) {
@@ -48,8 +48,7 @@ private:
     pcap::Crc32 crc_;
 };
 
-template <typename File>
-bool checkClosedPcap(const char* path, const Seal& seal) {
+template <typename File> bool checkClosedPcap(const char* path, const Seal& seal) {
     File input;
     if (!input.openRead(path)) {
         return false;
@@ -58,8 +57,7 @@ bool checkClosedPcap(const char* path, const Seal& seal) {
     return input.close() && valid;
 }
 
-template <typename File>
-bool readSeal(const std::string& path, Seal& seal) {
+template <typename File> bool readSeal(const std::string& path, Seal& seal) {
     File input;
     uint8_t record[sealSize];
     if (!input.openRead(path.c_str()) || !pcap::readExact(input, record, sizeof(record)) ||
@@ -73,14 +71,13 @@ bool readSeal(const std::string& path, Seal& seal) {
     }
     seal.size = 0;
     for (size_t index = crcOffset; index > sizeOffset; --index) {
-        seal.size = (seal.size << 8) | record[index - 1];
+        seal.size = (seal.size << 8U) | record[index - 1];
     }
     seal.crc = pcap::readNumber(record + crcOffset, sizeof(seal.crc), true);
     return true;
 }
 
-template <typename File>
-bool publishSeal(const std::string& path, const Seal& proof) {
+template <typename File> bool publishSeal(const std::string& path, const Seal& proof) {
     const auto finalPath = path + ".ok";
     const auto stagePath = finalPath + ".part";
     File seal;
@@ -104,10 +101,9 @@ bool publishSeal(const std::string& path, const Seal& proof) {
            File::publish(stagePath.c_str(), finalPath.c_str());
 }
 
-}  // namespace detail
+} // namespace detail
 
-template <typename File = SdFile>
-CaptureState recoverPcap(const char* path) {
+template <typename File = SdFile> CaptureState recoverPcap(const char* path) {
     if (path == nullptr || *path == '\0') {
         return CaptureState::error;
     }
@@ -115,7 +111,8 @@ CaptureState recoverPcap(const char* path) {
     const auto data = File::probe(path);
     const auto seal = File::probe(sealPath.c_str());
     const auto stage = File::probe((sealPath + ".part").c_str());
-    if (data == FilePresence::error || seal == FilePresence::error || stage == FilePresence::error) {
+    if (data == FilePresence::error || seal == FilePresence::error ||
+        stage == FilePresence::error) {
         return CaptureState::error;
     }
     if (stage == FilePresence::present) {
@@ -132,8 +129,7 @@ CaptureState recoverPcap(const char* path) {
 }
 
 // Stop and join the producer before finishing or destroying the capture.
-template <size_t Capacity, size_t MaxBlockSize, typename File = SdFile>
-class PcapCapture {
+template <size_t Capacity, size_t MaxBlockSize, typename File = SdFile> class PcapCapture {
 public:
     explicit PcapCapture(const char* path) : path_(path ? path : ""), queue_(file_) {}
 
@@ -154,9 +150,7 @@ public:
         return active_ ? queue_.enqueue(data, size) : EnqueueStatus::invalid;
     }
 
-    WriteStatus drainOne() {
-        return active_ ? queue_.drainOne() : WriteStatus::unavailable;
-    }
+    WriteStatus drainOne() { return active_ ? queue_.drainOne() : WriteStatus::unavailable; }
 
     uint32_t overflowCount() const { return queue_.overflowCount(); }
 
@@ -200,5 +194,5 @@ private:
     CaptureState result_ = CaptureState::incomplete;
 };
 
-}  // namespace storage
-}  // namespace airrounds
+} // namespace storage
+} // namespace airrounds

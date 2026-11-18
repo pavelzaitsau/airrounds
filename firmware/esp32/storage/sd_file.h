@@ -19,13 +19,9 @@ public:
     SdFile(const SdFile&) = delete;
     SdFile& operator=(const SdFile&) = delete;
 
-    ~SdFile() {
-        close();
-    }
+    ~SdFile() { close(); }
 
-    bool openNew(const char* path) {
-        return open(path, O_WRONLY | O_CREAT | O_EXCL);
-    }
+    bool openNew(const char* path) { return open(path, O_WRONLY | O_CREAT | O_EXCL); }
 
     bool openRead(const char* path) {
         if (!open(path, O_RDONLY | O_NONBLOCK)) {
@@ -39,13 +35,9 @@ public:
         return false;
     }
 
-    ssize_t read(uint8_t* data, size_t size) {
-        return ::read(descriptor_, data, size);
-    }
+    ssize_t read(uint8_t* data, size_t size) { return ::read(descriptor_, data, size); }
 
-    bool sync() {
-        return ::fsync(descriptor_) == 0;
-    }
+    bool sync() { return ::fsync(descriptor_) == 0; }
 
     bool close() {
         if (descriptor_ < 0) {

@@ -8,20 +8,16 @@ See the [T0 build commands](../docs/t0.md).
 
 ## SD writes and PCAP finalization
 
-Run the storage tests from the repository root.
+Run all storage tests from the repository root:
 
 ```sh
-build_dir="$(mktemp -d)"
-for test in pending_write sd_writer pcap_capture; do
-  c++ -std=c++11 -Wall -Wextra -Werror -pedantic -pthread \
-    -I firmware/esp32/storage "tests/storage/${test}_test.cpp" \
-    -o "$build_dir/${test}_test"
-done
-"$build_dir/pending_write_test"
-"$build_dir/sd_writer_test" "$build_dir"
-"$build_dir/pcap_capture_test" "$build_dir"
-tcpdump -nn -r "$build_dir/first.pcap"
+make test
+make asan
+make tsan
 ```
+
+Use `make check` to include formatting and static analysis. See
+[quality checks](../docs/quality.md) for tools, profiles, and exclusions.
 
 The tests cover a failed open, short and zero writes, and reported card
 errors. They check that overflow keeps the blocks in order when the writer

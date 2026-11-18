@@ -12,8 +12,8 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <sys/resource.h>
 #include <string>
+#include <sys/resource.h>
 #include <thread>
 #include <vector>
 
@@ -24,7 +24,6 @@ namespace {
 const uint8_t first[] = {1, 2, 3, 4};
 const uint8_t second[] = {5, 6};
 const uint8_t third[] = {7};
-const std::vector<uint8_t> all{1, 2, 3, 4, 5, 6, 7};
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -60,6 +59,7 @@ struct TestFile {
 };
 
 void testOverflowAndWrap() {
+    const std::vector<uint8_t> all{1, 2, 3, 4, 5, 6, 7};
     TestFile file;
     WriteQueue<2, 4, TestFile> queue(file);
     uint8_t input[] = {1, 2, 3, 4};
@@ -67,8 +67,14 @@ void testOverflowAndWrap() {
     input[0] = 0;
     require(queue.enqueue(second, sizeof(second)) == EnqueueStatus::queued, "second block");
     require(queue.enqueue(third, sizeof(third)) == EnqueueStatus::full, "full queue");
+    // This assertion deliberately checks a statically known invalid input.
+    // cppcheck-suppress knownConditionTrueFalse
     require(queue.enqueue(nullptr, 1) == EnqueueStatus::invalid, "reject null block");
+    // This assertion deliberately checks a statically known invalid input.
+    // cppcheck-suppress knownConditionTrueFalse
     require(queue.enqueue(first, 0) == EnqueueStatus::invalid, "reject empty block");
+    // This assertion deliberately checks a statically known invalid input.
+    // cppcheck-suppress knownConditionTrueFalse
     require(queue.enqueue(first, sizeof(first) + 1) == EnqueueStatus::invalid,
             "reject oversized block before copying");
     require(queue.overflowCount() == 1, "count only valid blocks rejected for overflow");
@@ -88,6 +94,8 @@ void testPartialAndZeroWrite() {
     require(queue.enqueue(second, sizeof(second)) == EnqueueStatus::queued, "queue second");
     file.writeLimit = 2;
     require(queue.drainOne() == WriteStatus::partial, "report partial write");
+    // drainOne consumed the previous limit through its templated File reference.
+    // cppcheck-suppress redundantAssignment
     file.writeLimit = 0;
     require(queue.drainOne() == WriteStatus::no_progress, "report zero write");
     require(queue.enqueue(third, sizeof(third)) == EnqueueStatus::full, "keep partial slot owned");
@@ -116,8 +124,7 @@ void testHardErrorAndInvalidCount() {
     for (size_t writeLimit : {size_t{2}, sizeof(first)}) {
         TestFile damaged;
         WriteQueue<1, 4, TestFile> damagedQueue(damaged);
-        require(damagedQueue.enqueue(first, sizeof(first)) == EnqueueStatus::queued,
-                "queue block");
+        require(damagedQueue.enqueue(first, sizeof(first)) == EnqueueStatus::queued, "queue block");
         damaged.writeLimit = writeLimit;
         damaged.error = EIO;
         require(damagedQueue.drainOne() == WriteStatus::io_error,
@@ -159,11 +166,12 @@ void testProducerDuringWrite() {
             "producer cannot overwrite a slot during a write");
     resume.set_value();
     consumer.join();
+    // The consumer invoked this callback before join; stop calling it on later drains.
+    // cppcheck-suppress redundantAssignment
     file.duringWrite = {};
     require(status == WriteStatus::complete, "first write completed");
     require(queue.drainOne() == WriteStatus::complete, "write block added during I/O");
-    require(file.contents == std::vector<uint8_t>({1, 2, 3, 4, 5, 6}) &&
-                queue.overflowCount() == 1,
+    require(file.contents == std::vector<uint8_t>({1, 2, 3, 4, 5, 6}) && queue.overflowCount() == 1,
             "keep data and count overflow while the consumer is busy");
 }
 
@@ -216,8 +224,9 @@ void testFileSizeLimit(const std::string& directory) {
     require(input.tellg() == 0, "the queue must not retry even after the limit is lifted");
 }
 
-}  // namespace
+} // namespace
 
+// NOLINTNEXTLINE(bugprone-exception-escape): Allocation failure must fail this host test.
 int main(int argc, char** argv) {
     require(argc == 2, "pass an empty temporary directory");
     testOverflowAndWrap();

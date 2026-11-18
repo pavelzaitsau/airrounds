@@ -7,8 +7,8 @@
 #include <limits>
 #include <vector>
 
-using airrounds::storage::WriteStatus;
 using airrounds::storage::writePending;
+using airrounds::storage::WriteStatus;
 
 namespace {
 
@@ -25,7 +25,9 @@ struct MemoryFile {
 
     size_t write(const uint8_t* bytes, size_t size) {
         ++calls;
-        if (badCount) return std::numeric_limits<size_t>::max();
+        if (badCount) {
+            return std::numeric_limits<size_t>::max();
+        }
         const size_t count = std::min(size, writeLimit);
         contents.insert(contents.end(), bytes, bytes + count);
         return count;
@@ -85,12 +87,16 @@ void testShortWriteAndRetry() {
 void testEmptyAndInvalidWrites() {
     MemoryFile file;
     size_t accepted = 0;
+    // Cppcheck can prove the expected result for this explicit invalid/empty input.
+    // cppcheck-suppress knownConditionTrueFalse
     require(writePending(file, nullptr, 0, accepted) == WriteStatus::complete,
             "empty block must complete without I/O");
-    require(writePending(file, nullptr, 1, accepted) == WriteStatus::invalid &&
-                accepted == 0 && file.calls == 0,
+    require(writePending(file, nullptr, 1, accepted) == WriteStatus::invalid && accepted == 0 &&
+                file.calls == 0,
             "nonempty null block must be rejected without I/O");
     accepted = sample.size() + 1;
+    // Cppcheck can prove the expected result for this explicit invalid/empty input.
+    // cppcheck-suppress knownConditionTrueFalse
     require(writePending(file, sample.data(), sample.size(), accepted) == WriteStatus::invalid &&
                 file.calls == 0,
             "out-of-range offset must be rejected without I/O");
@@ -101,8 +107,9 @@ void testEmptyAndInvalidWrites() {
             "invalid sink count must not advance the offset");
 }
 
-}  // namespace
+} // namespace
 
+// NOLINTNEXTLINE(bugprone-exception-escape): Allocation failure must fail this host test.
 int main() {
     testFullWriteAndRepeat();
     testClosedFileAndRetry();

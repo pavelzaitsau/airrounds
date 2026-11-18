@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,7 +70,12 @@ def tests(mode):
         with tempfile.TemporaryDirectory(prefix="airrounds-test-") as temporary:
             run([binary, temporary], env=environment)
             if mode == "test" and source.stem == "pcap_capture_test":
-                run([tool("tcpdump"), "-nn", "-r", Path(temporary) / "first.pcap"])
+                capture = Path(temporary) / "first.pcap"
+                run([tool("tcpdump"), "-nn", "-r", capture])
+                run([sys.executable, ROOT / "tools/mac/check_pcap.py", capture,
+                     "--receipt", Path(temporary) / "first.pcap.ok"])
+    if mode == "test":
+        run([sys.executable, "-m", "unittest", "tests.mac.test_check_pcap"])
 
 
 def formatting(fix=False):

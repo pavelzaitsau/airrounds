@@ -37,9 +37,9 @@ the ESP32 image checksum and validation hash, and runs Cppcheck using their comp
 | --- | --- |
 | `make format-check` | Formatting of project `.c`, `.cpp`, `.h`, and `.ino` files |
 | `make format` | Applies `.clang-format` to those files |
-| `make test` | All `tests/storage/*_test.cpp` with strict C++11 warnings |
-| `make asan` | The same tests with AddressSanitizer and UndefinedBehaviorSanitizer |
-| `make tsan` | The same tests with ThreadSanitizer, in separate executables |
+| `make test` | C++11 storage tests, Mac PCAP tests, and a check of a T2 capture and receipt |
+| `make asan` | The C++ storage tests with AddressSanitizer and UndefinedBehaviorSanitizer |
+| `make tsan` | The C++ storage tests with ThreadSanitizer, in separate executables |
 | `make tidy` | Clang-Tidy and its Clang Analyzer checks on the host test translation units |
 | `make cppcheck` | Host tests and included production headers, with native and 32-bit ESP32 profiles |
 | `make analyze` | Standalone Clang Static Analyzer; findings fail the command |

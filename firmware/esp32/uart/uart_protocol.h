@@ -9,11 +9,6 @@
 namespace airrounds {
 namespace uart {
 
-struct VisitId {
-    uint64_t boot;
-    uint32_t session;
-};
-
 class VisitBackend {
 public:
     virtual ~VisitBackend() = default;
@@ -57,14 +52,8 @@ public:
     void poll() {
         if (state_ == State::running && visit_.observationDone()) {
             endObservation(State::complete);
-        }
-        if (state_ == State::finalizing) {
-            outcome_ = visit_.saveResult();
-            if (outcome_ != Outcome::none) {
-                state_ = outcome_ == Outcome::saved || outcome_ == Outcome::not_observed
-                             ? afterSave_
-                             : State::error;
-            }
+        } else if (state_ == State::finalizing) {
+            updateSaveResult();
         }
     }
 
@@ -177,6 +166,15 @@ private:
         afterSave_ = afterSave;
         state_ = State::finalizing;
         visit_.beginSave({boot_, session_});
+        updateSaveResult();
+    }
+
+    void updateSaveResult() {
+        outcome_ = visit_.saveResult();
+        if (outcome_ != Outcome::none) {
+            state_ = outcome_ == Outcome::saved || outcome_ == Outcome::not_observed ? afterSave_
+                                                                                     : State::error;
+        }
     }
 
     VisitBackend& visit_;

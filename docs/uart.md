@@ -94,7 +94,8 @@ Session IDs and mutation request IDs do not wrap within a boot.
 The board stops the radio before it starts SD work. Find the capture at
 `visit-<boot>-<session>.pcap` on the card. Use the boot and session IDs from
 the reply. The board reports `saved` after it checks the closed file and
-publishes the receipt.
+publishes the receipt. If a stop ends a quiet visit, the reply can report
+`stopped` and `not_observed` at once.
 
 ## Retry and reconnect
 
@@ -105,7 +106,9 @@ cannot run again. A failed command with a valid mutation header and verb
 also consumes its request ID.
 
 On reconnect, send a fresh `hello`. Read `last_mutation` before choosing the
-next mutation ID. Use a new `status` request to recover any lost result.
+next mutation ID. Keep track of the highest ID you sent during the same
+board boot. Use an ID above both values for a new command. Send a new
+`status` request to recover a lost result.
 If UART drops while a visit is running, the board still uses the 5 s
 observation window and saves any sample. After reboot, the board starts idle
 under a new boot ID.

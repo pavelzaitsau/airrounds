@@ -49,28 +49,38 @@ inline const char* wireName(Outcome outcome) {
     return names[static_cast<size_t>(outcome)];
 }
 
-template <typename Word> bool validWireName(Field field, Word last) {
+template <typename Word> bool readWireName(Field field, Word last, Word& value) {
     for (size_t index = 0; index <= static_cast<size_t>(last); ++index) {
-        if (field.is(wireName(static_cast<Word>(index)))) {
+        const auto candidate = static_cast<Word>(index);
+        if (field.is(wireName(candidate))) {
+            value = candidate;
             return true;
         }
     }
     return false;
 }
 
-inline bool validReplyFields(Fields& fields) {
-    uint64_t session = 0;
-    uint64_t lastMutation = 0;
-    uint64_t featureBits = 0;
-    return validWireName(fields.take(), Code::stale_request) && fields.take().hex(8, session) &&
-           validWireName(fields.take(), State::error) &&
-           validWireName(fields.take(), Outcome::storage_error) &&
-           fields.take().hex(16, lastMutation) && (lastMutation & readRequestBit) == 0 &&
-           fields.take().hex(2, featureBits) && fields.atEnd();
-}
+struct VisitId {
+    uint64_t boot;
+    uint32_t session;
 
-// A zero expected boot is for hello only. Pass one line including its line feed.
-inline bool matchesReply(const char* line, const ReplyKey& expected) {
+    bool matches(const VisitId& other) const {
+        return boot == other.boot && session == other.session;
+    }
+};
+
+struct Reply {
+    Envelope envelope;
+    Code code = Code::bad_request;
+    uint32_t session = 0;
+    State state = State::idle;
+    Outcome outcome = Outcome::none;
+    uint64_t lastMutation = 0;
+    uint8_t features = 0;
+};
+
+// Pass one line including its line feed.
+inline bool readReply(const char* line, Reply& reply) {
     const char* marker = strrchr(line, '!');
     if (marker == nullptr) {
         return false;
@@ -85,15 +95,38 @@ inline bool matchesReply(const char* line, const ReplyKey& expected) {
     memcpy(body, marker + 1, length - 2);
     body[length - 2] = '\0';
     Fields fields(body);
-    Envelope reply;
-    if (!reply.read(fields) || reply.wireVersion != version || reply.key.boot == 0) {
+    uint64_t session = 0;
+    uint64_t featureBits = 0;
+    Reply parsed;
+    if (!parsed.envelope.read(fields) ||
+        !readWireName(fields.take(), Code::stale_request, parsed.code) ||
+        !fields.take().hex(8, session) ||
+        !readWireName(fields.take(), State::error, parsed.state) ||
+        !readWireName(fields.take(), Outcome::storage_error, parsed.outcome) ||
+        !fields.take().hex(16, parsed.lastMutation) ||
+        (parsed.lastMutation & readRequestBit) != 0 || !fields.take().hex(2, featureBits) ||
+        !fields.atEnd()) {
         return false;
     }
+    parsed.session = static_cast<uint32_t>(session);
+    parsed.features = static_cast<uint8_t>(featureBits);
+    reply = parsed;
+    return true;
+}
+
+// A zero expected boot is for hello only.
+inline bool matchesReplyKey(const ReplyKey& reply, const ReplyKey& expected) {
     const bool bootMatches = expected.boot == 0
                                  ? expected.scope == 0 && (expected.request & readRequestBit) != 0
-                                 : reply.key.boot == expected.boot;
-    return bootMatches && reply.key.request == expected.request &&
-           reply.key.scope == expected.scope && validReplyFields(fields);
+                                 : reply.boot == expected.boot;
+    return reply.boot != 0 && bootMatches && reply.request == expected.request &&
+           reply.scope == expected.scope;
+}
+
+inline bool matchesReply(const char* line, const ReplyKey& expected) {
+    Reply reply;
+    return readReply(line, reply) && reply.envelope.wireVersion == version &&
+           matchesReplyKey(reply.envelope.key, expected);
 }
 
 } // namespace uart

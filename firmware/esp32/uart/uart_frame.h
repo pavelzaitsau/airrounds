@@ -101,7 +101,8 @@ private:
 };
 
 constexpr uint64_t version = 1;
-constexpr unsigned features = 1;
+constexpr unsigned passiveVisitFeature = 1;
+constexpr unsigned features = passiveVisitFeature;
 
 struct ReplyKey {
     uint64_t boot;

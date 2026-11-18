@@ -17,6 +17,8 @@ public:
     bool start(const Target&) override {
         assert(!receiving);
         ++starts;
+        done = false;
+        result = Outcome::none;
         receiving = radioStarts;
         return radioStarts;
     }
@@ -125,6 +127,15 @@ void retriesAndSave() {
     assert(wire.command(start).find("00000001 stopped saved") != std::string::npos);
     assert(wire.visit.starts == 1 && wire.visit.stops == 1 && wire.visit.saves == 1);
     assert(wire.visit.saveId.boot == boot && wire.visit.saveId.session == 1);
+}
+
+void quietStopCompletesInReply() {
+    Wire wire;
+    wire.command("0000000000000001 00000001 start 020000000001 06");
+    wire.visit.result = Outcome::not_observed;
+    const auto reply = wire.command("0000000000000002 00000001 stop");
+    assert(reply.find("00000001 stopped not_observed") != std::string::npos);
+    assert(wire.visit.stops == 1);
 }
 
 void interruptedStream() {
@@ -257,12 +268,13 @@ void failures() {
 int main() try {
     negotiationAndValidation();
     retriesAndSave();
+    quietStopCompletesInReply();
     interruptedStream();
     replyFraming();
     staleTraffic();
     replayAfterStateChange();
     failures();
-    std::cout << "UART protocol: 7 groups passed\n";
+    std::cout << "UART protocol: 8 groups passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

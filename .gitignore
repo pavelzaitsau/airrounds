@@ -17,7 +17,5 @@ dist/
 *.cap
 *.pcap
 *.pcapng
-!tests/fixtures/**/*.pcap
-!tests/fixtures/**/*.pcapng
 
 node_modules/

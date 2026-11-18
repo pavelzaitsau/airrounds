@@ -13,8 +13,9 @@ Mac checks the files after transfer.
 | `tests/` | Holds host tests and synthetic inputs |
 | `docs/` | Describes the components, development steps, and acceptance checks |
 
-The first task is to record the source revisions and set up the build tools.
-See the [component map](docs/architecture.md) and [development steps](docs/development.md).
+T0 starts with the source revisions and build tools. See the
+[development plan](docs/plan.md), [component map](docs/architecture.md), and
+[tool setup](docs/development.md).
 
 ## Project skills
 

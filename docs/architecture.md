@@ -17,6 +17,5 @@ the result from the board. The Mac reads the transferred files and compares them
 with the session log. Document the UART protocol and log format in `docs/`
 when the first testable versions are ready.
 
-This layout covers the passive part of the plan. First, pin compatible source
-revisions and build tools for both components. The component directories are
-the starting points for that work.
+Use the component directories to pin compatible source revisions and SDKs.
+The [development plan](plan.md) lists the steps and when each is complete.

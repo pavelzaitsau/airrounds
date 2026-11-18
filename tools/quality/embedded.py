@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile both ESP32 examples and the Flipper app, without flashing devices."""
+"""Compile the ESP32 examples and the Flipper app, without flashing devices."""
 
 import os
 import re
@@ -59,8 +59,12 @@ def main():
         name = sketch.name
         destination = OUTPUT / "esp32" / name
         destination.mkdir(parents=True, exist_ok=True)
-        run([cli, "compile", "--fqbn", "esp32:esp32:esp32s2",
-             "--library", ROOT / "firmware/esp32/storage",
+        fqbn = "esp32:esp32:esp32s2"
+        libraries = ["--library", ROOT / "firmware/esp32/storage"]
+        if name == "airrounds_passive_smoke":
+            fqbn += ":CDCOnBoot=cdc"
+            libraries += ["--library", ROOT / "firmware/esp32/session"]
+        run([cli, "compile", "--fqbn", fqbn, *libraries,
              "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
              "--build-property", "tools.esptool_py.cmd=esptool.py",
              "--build-path", ROOT / "build/embedded" / name,

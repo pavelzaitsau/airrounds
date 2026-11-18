@@ -103,6 +103,8 @@ template <typename File> bool publishSeal(const std::string& path, const Seal& p
 
 } // namespace detail
 
+constexpr size_t pcapReceiptSize = detail::sealSize;
+
 template <typename File = SdFile> CaptureState recoverPcap(const char* path) {
     if (path == nullptr || *path == '\0') {
         return CaptureState::error;

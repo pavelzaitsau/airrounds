@@ -65,3 +65,23 @@ Recovery checks the files in place. Use a new capture path after an incomplete
 visit. Keep the receipt with the PCAP when moving the files. This check covers
 the file structure and bytes. Later stages check what the records contain and
 write the session log.
+
+## Run a passive visit
+
+A T4 visit fixes one access point address (BSSID) and one 2.4 GHz channel
+at startup. It rejects an empty list, multiple targets, an invalid BSSID,
+or a channel outside 1–13.
+
+The visit starts Wi-Fi in receive-only mode and keeps its settings in RAM.
+It listens on the selected channel for up to 5 s. It accepts the first complete beacon
+from the selected BSSID. The receiver checks the radio channel and any
+advertised primary channel. The board stops the radio before it uses the
+card.
+
+The visit writes one raw 802.11 record with the original beacon bytes. The
+timestamp records elapsed time since the visit started. The visit reports
+`saved` after T2 reopens the closed PCAP and publishes its receipt. A quiet
+visit reports `not_observed`. A card or file error reports `storage_error`.
+
+See the [T4 checks](../../tests/README.md#one-passive-access-point) for
+the host test and the bench commands.

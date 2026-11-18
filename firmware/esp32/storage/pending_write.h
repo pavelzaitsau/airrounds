@@ -45,5 +45,5 @@ WriteStatus writePending(File& file, const uint8_t* bytes, size_t size, size_t& 
     return accepted == size ? WriteStatus::complete : WriteStatus::partial;
 }
 
-}  // namespace storage
-}  // namespace airrounds
+} // namespace storage
+} // namespace airrounds

@@ -15,12 +15,13 @@ enum class EnqueueStatus {
 };
 
 // One producer calls enqueue and one consumer owns the file and calls drainOne.
-template <size_t Capacity, size_t MaxBlockSize, typename File>
-class WriteQueue {
+template <size_t Capacity, size_t MaxBlockSize, typename File> class WriteQueue {
     static_assert(Capacity > 0 && Capacity < UINT32_MAX, "invalid queue capacity");
     static_assert(MaxBlockSize > 0, "invalid block size");
 
 public:
+    // enqueue initializes each slot before its release-store publishes it.
+    // cppcheck-suppress uninitMemberVar
     explicit WriteQueue(File& file) : file_(file) {}
 
     EnqueueStatus enqueue(const uint8_t* data, size_t size) {
@@ -74,9 +75,8 @@ public:
     // Only the consumer reads this count.
     uint64_t bytesWritten() const { return bytesWritten_; }
 
-    uint32_t overflowCount() const {
-        return overflowCount_.load(std::memory_order_relaxed);
-    }
+    uint32_t overflowCount() const { return overflowCount_.load(std::memory_order_relaxed); }
+
 
 private:
     struct Block {
@@ -84,9 +84,7 @@ private:
         size_t size;
     };
 
-    static uint32_t nextIndex(uint32_t index) {
-        return index == Capacity ? 0 : index + 1;
-    }
+    static uint32_t nextIndex(uint32_t index) { return index == Capacity ? 0 : index + 1; }
 
     File& file_;
     Block blocks_[Capacity + 1];
@@ -98,5 +96,5 @@ private:
     WriteStatus failure_ = WriteStatus::complete;
 };
 
-}  // namespace storage
-}  // namespace airrounds
+} // namespace storage
+} // namespace airrounds

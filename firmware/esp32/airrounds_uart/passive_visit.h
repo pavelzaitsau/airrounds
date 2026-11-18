@@ -8,6 +8,7 @@
 #include <esp_timer.h>
 #include <esp_wifi.h>
 
+#include "capture_path.h"
 #include "passive_session.h"
 #include "uart_protocol.h"
 
@@ -51,7 +52,7 @@ public:
         return disabled && !radioFault_;
     }
 
-    void beginSave(VisitId id) override {
+    void beginSave(const CaptureId& id) override {
         if (!visit_.hasSample()) {
             visit_.finish(nullptr);
             result_.store(Outcome::not_observed, std::memory_order_release);
@@ -149,6 +150,11 @@ private:
     }
 
     Outcome save() {
+        char path[56];
+        if (!capturePath(path, sizeof(path), "/sd", savedVisit_)) {
+            return Outcome::storage_error;
+        }
+
         constexpr int sdClock = 36;
         constexpr int sdMiso = 37;
         constexpr int sdMosi = 35;
@@ -159,9 +165,6 @@ private:
             return Outcome::storage_error;
         }
 
-        char path[48];
-        snprintf(path, sizeof(path), "/sd/visit-%016" PRIx64 "-%08" PRIx32 ".pcap",
-                 savedVisit_.boot, savedVisit_.session);
         const auto result = visit_.finish(path);
         SD.end();
         SPI.end();
@@ -173,7 +176,7 @@ private:
     int64_t startedUs_ = 0;
     bool listening_ = false;
     bool radioFault_ = false;
-    VisitId savedVisit_{};
+    CaptureId savedVisit_{};
     std::atomic<Outcome> result_{Outcome::none};
 };
 

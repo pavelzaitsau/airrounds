@@ -18,7 +18,7 @@ constexpr uint64_t boot = 0x123456789abcdef0ULL;
 class Visit final : public VisitBackend {
 public:
     bool start(const airrounds::session::Target& selected) override {
-        assert(selected.channel == target.channel && selected.bssid[0] == target.bssid[0]);
+        assert(airrounds::session::validTarget(selected));
         ++starts;
         done = false;
         outcome = Outcome::none;
@@ -29,7 +29,7 @@ public:
         ++stops;
         return true;
     }
-    void beginSave(VisitId) override {}
+    void beginSave(const CaptureId&) override {}
     Outcome saveResult() const override { return outcome; }
 
     unsigned starts = 0;
@@ -60,13 +60,17 @@ public:
         }
     }
 
-    void handshake() {
+    void handshake(bool rounds = true) {
         client.poll(now);
         assert(outbound.find(" hello\n") != std::string::npos);
-        receive("ROM: reset" + deliver());
+        auto hello = deliver();
+        if (!rounds) {
+            hello.replace(hello.size() - 3, 2, "01");
+        }
+        receive("ROM: reset" + hello);
         assert(client.link() != Link::ready);
         client.poll(now);
-        assert(outbound.find(" status\n") != std::string::npos);
+        assert(outbound.find(rounds ? " round_status\n" : " status\n") != std::string::npos);
         receive(deliver());
         assert(client.link() == Link::ready);
     }
@@ -267,6 +271,167 @@ void loseStopReplyDuringSave() {
     assert(link.client.outcome() == Outcome::saved);
     assert(link.visit.stops == 1);
 }
+void roundStopWhileSavingAndReconnect() {
+    using airrounds::flipper::roundSlotLabel;
+    Loopback link;
+    link.handshake();
+    airrounds::session::Profile profile;
+    const bool invalidStarted = link.client.start(profile, link.now);
+    assert(!invalidStarted);
+    const bool valid = profile.add(target) && profile.add({{2, 0, 0, 0, 0, 2}, 6}) &&
+                       profile.add({{2, 0, 0, 0, 0, 3}, 11});
+    assert(valid);
+    const bool started = link.client.start(profile, link.now);
+    assert(started);
+    const auto start = link.deliver();
+    link.receive(start);
+    assert(link.client.round().profile.matches(profile));
+    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Listening");
+    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 2)) == "Waiting");
+
+    link.visit.done = true;
+    link.board.poll();
+    link.now += 500;
+    link.client.poll(link.now);
+    link.receive(start);
+    assert(link.client.state() == State::running);
+    const auto status = link.deliver();
+    auto inconsistent = status;
+    inconsistent[inconsistent.size() - 2] = '2';
+    link.receive(inconsistent);
+    assert(link.client.state() == State::running);
+    link.receive(status);
+    assert(link.client.state() == State::finalizing);
+    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Saving...");
+    assert(link.client.stop(link.client.visitId(), link.now));
+    const auto lostStop = link.deliver();
+    assert(lostStop.find("finalizing none") != std::string::npos);
+    link.visit.outcome = Outcome::saved;
+    link.board.poll();
+    assert(link.visit.starts == 1 && link.visit.stops == 1);
+
+    link.client = SessionClient(Loopback::write, &link, 0x90);
+    link.handshake();
+    assert(link.client.state() == State::stopped);
+    assert(link.client.round().profile.matches(profile));
+    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Saved");
+    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 2)) == "Skipped");
+}
+
+airrounds::session::Profile twoPointProfile() {
+    airrounds::session::Profile profile;
+    const bool valid = profile.add(target) && profile.add({{2, 0, 0, 0, 0, 2}, 11});
+    assert(valid);
+    return profile;
+}
+
+void roundRepliesKeepTheRequestedProfile() {
+    using airrounds::flipper::Request;
+    Loopback link;
+    link.handshake();
+    const auto profile = twoPointProfile();
+    const bool started = link.client.start(profile, link.now);
+    assert(started);
+    const auto start = link.deliver();
+    auto changed = start;
+    changed.replace(changed.find("0200000000020b0"), 15, "0200000000040b0");
+    link.receive(changed);
+    assert(link.client.pending() == Request::start);
+    link.receive(start);
+    assert(link.client.round().profile.matches(profile));
+
+    link.now += 500;
+    link.client.poll(link.now);
+    const auto status = link.deliver();
+    changed = status;
+    changed.replace(changed.find("0200000000020b0"), 15, "020000000002010");
+    link.receive(changed);
+    assert(link.client.pending() == Request::status);
+    assert(link.client.round().profile.matches(profile));
+    link.receive(status);
+    assert(link.client.pending() == Request::none);
+}
+
+void roundRepliesKeepFinishedResults() {
+    using airrounds::flipper::Request;
+    Loopback link;
+    link.handshake();
+    const bool started = link.client.start(twoPointProfile(), link.now);
+    assert(started);
+    link.receive(link.deliver());
+    link.visit.done = true;
+    link.visit.outcome = Outcome::saved;
+    link.board.poll();
+
+    link.now += 500;
+    link.client.poll(link.now);
+    link.receive(link.deliver());
+    assert(link.client.round().results[0] == Outcome::saved);
+    link.now += 500;
+    link.client.poll(link.now);
+    const auto status = link.deliver();
+    auto changed = status;
+    changed.replace(changed.find("020000000001062"), 15, "020000000001061");
+    link.receive(changed);
+    assert(link.client.pending() == Request::status);
+    assert(link.client.round().results[0] == Outcome::saved);
+    link.receive(status);
+
+    link.visit.outcome = Outcome::not_observed;
+    assert(link.client.stop(link.client.visitId(), link.now));
+    link.receive(link.deliver());
+    assert(link.client.state() == State::stopped);
+    link.now += 500;
+    link.client.poll(link.now);
+    const auto stopped = link.deliver();
+    auto wrongState = stopped;
+    wrongState.replace(wrongState.find(" stopped saved "), 15, " complete saved ");
+    link.receive(wrongState);
+    assert(link.client.pending() == Request::status);
+    assert(link.client.state() == State::stopped);
+    link.receive(stopped);
+    assert(link.client.pending() == Request::none);
+}
+
+void nextRoundCanUseAnotherProfile() {
+    Loopback link;
+    link.handshake();
+    auto profile = twoPointProfile();
+    const bool started = link.client.start(profile, link.now);
+    assert(started);
+    link.receive(link.deliver());
+
+    link.visit.outcome = Outcome::not_observed;
+    assert(link.client.stop(link.client.visitId(), link.now));
+    link.receive(link.deliver());
+    assert(link.client.state() == State::stopped);
+
+    profile.removeLast();
+    const bool valid = profile.add({{2, 0, 0, 0, 0, 3}, 1});
+    assert(valid);
+    const bool restarted = link.client.start(profile, link.now);
+    assert(restarted);
+    link.receive(link.deliver());
+    assert(link.client.state() == State::running);
+    assert(link.client.visitId().matches({boot, 2}));
+    assert(link.client.round().profile.matches(profile));
+}
+
+void oldFirmwareKeepsSingleVisit() {
+    Loopback link;
+    link.handshake(false);
+    assert(!link.client.supportsRounds());
+    airrounds::session::Profile profile;
+    const bool valid = profile.add(target) && profile.add({{2, 0, 0, 0, 0, 2}, 11});
+    assert(valid);
+    const bool invalidStarted = link.client.start(profile, link.now);
+    assert(!invalidStarted);
+    assert(link.outbound.empty());
+    assert(link.client.start(target, link.now));
+    assert(link.outbound.find(" start ") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.state() == State::running);
+}
 } // namespace
 
 int main() try {
@@ -278,6 +443,11 @@ int main() try {
     freshStatusAfterReturn();
     noMutationWithoutCompatibleStatus();
     loseStopReplyDuringSave();
+    roundStopWhileSavingAndReconnect();
+    roundRepliesKeepTheRequestedProfile();
+    roundRepliesKeepFinishedResults();
+    nextRoundCanUseAnotherProfile();
+    oldFirmwareKeepsSingleVisit();
     std::cout << "Flipper client checks passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <numeric>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -16,6 +18,65 @@ inline bool validTarget(const Target& target) {
     return target.channel >= 1 && target.channel <= 13 && (target.bssid[0] & 1U) == 0 &&
            memcmp(target.bssid, zeroAddress, sizeof(zeroAddress)) != 0;
 }
+
+inline bool sameAddress(const Target& first, const Target& second) {
+    return memcmp(first.bssid, second.bssid, sizeof(first.bssid)) == 0;
+}
+
+inline uint64_t addressValue(const Target& target) {
+    return std::accumulate(target.bssid, target.bssid + sizeof(target.bssid), uint64_t{0},
+                           [](uint64_t address, uint8_t octet) { return (address << 8U) | octet; });
+}
+
+inline void setAddress(Target& target, uint64_t address) {
+    for (size_t index = sizeof(target.bssid); index > 0; --index) {
+        target.bssid[index - 1] = static_cast<uint8_t>(address);
+        address >>= 8U;
+    }
+}
+
+class Profile {
+public:
+    enum : size_t { capacity = 3 };
+
+    size_t size() const { return size_; }
+    const Target& operator[](size_t index) const { return targets_[index]; }
+
+    bool add(const Target& target) {
+        if (size_ == capacity || !validTarget(target)) {
+            return false;
+        }
+        for (size_t i = 0; i < size_; ++i) {
+            if (sameAddress(targets_[i], target)) {
+                return false;
+            }
+        }
+        targets_[size_++] = target;
+        return true;
+    }
+
+    void removeLast() {
+        if (size_ > 0) {
+            --size_;
+        }
+    }
+
+    bool matches(const Profile& other) const {
+        if (size_ != other.size_) {
+            return false;
+        }
+        for (size_t i = 0; i < size_; ++i) {
+            if (targets_[i].channel != other[i].channel || !sameAddress(targets_[i], other[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    Target targets_[capacity]{};
+    size_t size_ = 0;
+};
 
 } // namespace session
 } // namespace airrounds

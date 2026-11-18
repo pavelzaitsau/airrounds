@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../session/target.h"
 #include "uart_frame.h"
 
 namespace airrounds {
@@ -18,9 +19,9 @@ enum class Code {
 };
 
 enum class State { idle, running, finalizing, complete, stopped, error };
-enum class Outcome { none, not_observed, saved, radio_error, storage_error };
+enum class Outcome { none = 0, not_observed = 1, saved = 2, radio_error = 3, storage_error = 4 };
 
-constexpr size_t wireReplyCapacity = 128;
+constexpr size_t wireReplyCapacity = 192;
 
 inline const char* wireName(Code code) {
     static constexpr const char* names[]{
@@ -69,6 +70,20 @@ struct VisitId {
     }
 };
 
+struct RoundStatus {
+    session::Profile profile;
+    Outcome results[session::Profile::capacity]{};
+
+    // The first unfinished slot is the active one while the board is busy.
+    size_t next() const {
+        size_t index = 0;
+        while (index < profile.size() && results[index] != Outcome::none) {
+            ++index;
+        }
+        return index;
+    }
+};
+
 struct Reply {
     Envelope envelope;
     Code code = Code::bad_request;
@@ -77,7 +92,39 @@ struct Reply {
     Outcome outcome = Outcome::none;
     uint64_t lastMutation = 0;
     uint8_t features = 0;
+    bool hasRound = false;
+    RoundStatus round;
 };
+
+inline bool readRound(Fields& fields, RoundStatus& round) {
+    if (!fields.take().is("aps")) {
+        return false;
+    }
+    for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
+         ++index) {
+        const auto entry = fields.take();
+        if (entry.size != 15) {
+            return false;
+        }
+        uint64_t address = 0;
+        uint64_t channel = 0;
+        uint64_t result = 0;
+        const Field bssid{entry.data, 12};
+        const Field channelField{entry.data + 12, 2};
+        const Field resultField{entry.data + 14, 1};
+        if (!bssid.hex(12, address) || !channelField.hex(2, channel) ||
+            !resultField.hex(1, result) || result > static_cast<uint64_t>(Outcome::storage_error)) {
+            return false;
+        }
+        session::Target target{{}, static_cast<uint8_t>(channel)};
+        session::setAddress(target, address);
+        if (!round.profile.add(target)) {
+            return false;
+        }
+        round.results[index] = static_cast<Outcome>(result);
+    }
+    return fields.atEnd();
+}
 
 // Pass one line including its line feed.
 inline bool readReply(const char* line, Reply& reply) {
@@ -104,12 +151,16 @@ inline bool readReply(const char* line, Reply& reply) {
         !readWireName(fields.take(), State::error, parsed.state) ||
         !readWireName(fields.take(), Outcome::storage_error, parsed.outcome) ||
         !fields.take().hex(16, parsed.lastMutation) ||
-        (parsed.lastMutation & readRequestBit) != 0 || !fields.take().hex(2, featureBits) ||
-        !fields.atEnd()) {
+        (parsed.lastMutation & readRequestBit) != 0 || !fields.take().hex(2, featureBits)) {
         return false;
     }
     parsed.session = static_cast<uint32_t>(session);
     parsed.features = static_cast<uint8_t>(featureBits);
+    parsed.hasRound = !fields.atEnd();
+    if (parsed.hasRound &&
+        ((parsed.features & passiveRoundFeature) == 0 || !readRound(fields, parsed.round))) {
+        return false;
+    }
     reply = parsed;
     return true;
 }

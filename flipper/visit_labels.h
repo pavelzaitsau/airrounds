@@ -54,5 +54,29 @@ inline VisitLabels visitLabels(const SessionClient& client) {
     return {"Error", "Unknown visit state"};
 }
 
+inline const char* roundSlotLabel(const uart::RoundStatus& round, uart::State state, size_t index) {
+    using uart::Outcome;
+    using uart::State;
+    switch (round.results[index]) {
+    case Outcome::saved:
+        return "Saved";
+    case Outcome::not_observed:
+        return "No beacon";
+    case Outcome::radio_error:
+        return "Radio failed";
+    case Outcome::storage_error:
+        return "SD failed";
+    case Outcome::none:
+        if (state == State::stopped || state == State::error) {
+            return "Skipped";
+        }
+        if (index == round.next()) {
+            return state == State::finalizing ? "Saving..." : "Listening";
+        }
+        return "Waiting";
+    }
+    return "";
+}
+
 } // namespace flipper
 } // namespace airrounds

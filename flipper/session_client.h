@@ -23,18 +23,32 @@ public:
     uart::State state() const { return snapshot_.state; }
     uart::Outcome outcome() const { return snapshot_.outcome; }
 
-    bool canStart() const {
-        return canMutate() && snapshot_.session != UINT32_MAX && state() != uart::State::running &&
+    const uart::RoundStatus& round() const { return snapshot_.round; }
+    bool supportsRounds() const { return link_ == Link::ready && supportsRounds_; }
+
+    bool canStart(size_t count = 1) const {
+        return count > 0 && count <= (supportsRounds() ? session::Profile::capacity : 1U) &&
+               canMutate() && snapshot_.session != UINT32_MAX && state() != uart::State::running &&
                state() != uart::State::finalizing;
     }
 
-    bool canStop() const { return canMutate() && state() == uart::State::running; }
+    bool canStop() const {
+        return canMutate() &&
+               (state() == uart::State::running || (state() == uart::State::finalizing &&
+                                                    round().next() + 1 < round().profile.size()));
+    }
 
     bool start(const session::Target& target, uint32_t now) {
-        if (!canStart() || !session::validTarget(target)) {
+        session::Profile profile;
+        return profile.add(target) && start(profile, now);
+    }
+
+    bool start(const session::Profile& profile, uint32_t now) {
+        if (!canStart(profile.size())) {
             return false;
         }
-        request(Request::start, "start", now, &target);
+        requestedProfile_ = profile;
+        request(Request::start, now, &requestedProfile_);
         return true;
     }
 
@@ -42,7 +56,7 @@ public:
         if (!canStop() || !expected.matches(visitId())) {
             return false;
         }
-        request(Request::stop, "stop", now);
+        request(Request::stop, now);
         return true;
     }
 
@@ -67,9 +81,9 @@ public:
         }
         if (now - wait_.since >= wait_.duration) {
             if (boot_ == 0) {
-                request(Request::hello, "hello", now);
+                request(Request::hello, now);
             } else {
-                request(Request::status, "status", now);
+                request(Request::status, now);
             }
         }
     }
@@ -125,8 +139,7 @@ private:
         return output + width;
     }
 
-    void request(Request kind, const char* verb, uint32_t now,
-                 const session::Target* target = nullptr) {
+    void request(Request kind, uint32_t now, const session::Profile* profile = nullptr) {
         pending_ = kind;
         sentAt_ = now;
         const bool mutation = mutationPending();
@@ -134,11 +147,20 @@ private:
         if (mutation) {
             rejected_ = Request::none;
         }
+        const char* verb = "hello";
         uint32_t scope = 0;
+        expectsRound_ = false;
         if (kind == Request::start) {
             scope = snapshot_.session + 1U;
+            expectsRound_ = profile->size() > 1;
+            verb = expectsRound_ ? "round" : "start";
         } else if (kind == Request::stop) {
             scope = snapshot_.session;
+            expectsRound_ = round().profile.size() > 1;
+            verb = expectsRound_ ? "round_stop" : "stop";
+        } else if (kind == Request::status) {
+            expectsRound_ = supportsRounds_;
+            verb = expectsRound_ ? "round_status" : "status";
         }
         key_ = {boot_, id, scope};
 
@@ -156,15 +178,12 @@ private:
         const size_t verbLength = strlen(verb);
         memcpy(out, verb, verbLength);
         out += verbLength;
-        if (target != nullptr) {
+        for (size_t index = 0; profile != nullptr && index < profile->size(); ++index) {
+            const auto& target = (*profile)[index];
             *out++ = ' ';
-            constexpr size_t addressSize = sizeof(target->bssid);
-            for (size_t index = 0; index < addressSize; ++index) {
-                hex<2>(out + 2 * index, target->bssid[index]);
-            }
-            out += 2 * addressSize;
+            out = hex<12>(out, session::addressValue(target));
             *out++ = ' ';
-            out = hex<2>(out, target->channel);
+            out = hex<2>(out, target.channel);
         }
         *out++ = '\n';
         send_(context_, frame, static_cast<size_t>(out - frame));
@@ -199,6 +218,7 @@ private:
                 reconnect(Link::incompatible, now);
                 return;
             }
+            supportsRounds_ = (reply.features & uart::passiveRoundFeature) != 0;
             boot_ = reply.envelope.key.boot;
             if (boot_ != mutationBoot_) {
                 mutationBoot_ = boot_;
@@ -234,6 +254,73 @@ private:
         return false;
     }
 
+    static bool validRound(const uart::Reply& reply) {
+        using uart::Outcome;
+        using uart::State;
+        const auto& round = reply.round;
+        const size_t count = round.profile.size();
+        const size_t next = round.next();
+        if ((count == 0) != (reply.state == State::idle)) {
+            return false;
+        }
+        bool saved = false;
+        for (size_t index = 0; index < count; ++index) {
+            const auto result = round.results[index];
+            if (index >= next) {
+                if (result != Outcome::none) {
+                    return false;
+                }
+            } else if (reply.state == State::error && index + 1 == next) {
+                if (result != reply.outcome) {
+                    return false;
+                }
+            } else if (result == Outcome::saved) {
+                saved = true;
+            } else if (result != Outcome::not_observed) {
+                return false;
+            }
+        }
+        switch (reply.state) {
+        case State::idle:
+            return true;
+        case State::running:
+        case State::finalizing:
+            return next < count;
+        case State::error:
+            return next > 0;
+        case State::complete:
+        case State::stopped:
+            return next > 0 && (reply.state == State::stopped || next == count) &&
+                   reply.outcome == (saved ? Outcome::saved : Outcome::not_observed);
+        }
+        return false;
+    }
+
+    bool consistentRound(const uart::Reply& reply) const {
+        if (pending_ == Request::start && !requestedProfile_.matches(reply.round.profile)) {
+            return false;
+        }
+        if (!snapshot_.hasRound || snapshot_.envelope.key.boot != reply.envelope.key.boot ||
+            snapshot_.session != reply.session) {
+            return true;
+        }
+
+        using uart::State;
+        const bool finished =
+            state() == State::complete || state() == State::stopped || state() == State::error;
+        if (!round().profile.matches(reply.round.profile) || (finished && state() != reply.state)) {
+            return false;
+        }
+        for (size_t index = 0; index < round().profile.size(); ++index) {
+            const auto result = round().results[index];
+            if ((finished || result != uart::Outcome::none) &&
+                result != reply.round.results[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void acceptStatus(const uart::Reply& reply, uint32_t now) {
         const bool mutation = mutationPending();
         if (reply.code != uart::Code::ok) {
@@ -247,7 +334,8 @@ private:
             wait_ = {now, 0};
             return;
         }
-        if (!validSnapshot(reply) ||
+        if (!validSnapshot(reply) || reply.hasRound != expectsRound_ ||
+            (reply.hasRound && (!validRound(reply) || !consistentRound(reply))) ||
             (mutation && (reply.session != key_.scope || reply.lastMutation != key_.request))) {
             return;
         }
@@ -274,6 +362,9 @@ private:
     uint64_t mutationHighWater_ = 0;
     uart::ReplyKey key_{};
     uart::Reply snapshot_;
+    session::Profile requestedProfile_;
+    bool supportsRounds_ = false;
+    bool expectsRound_ = false;
     Link link_ = Link::connecting;
     Request pending_ = Request::none;
     Request rejected_ = Request::none;

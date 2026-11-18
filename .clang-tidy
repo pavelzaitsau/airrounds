@@ -10,7 +10,7 @@ Checks: >-
   readability-function-size,
   readability-function-cognitive-complexity
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*(firmware/esp32/(storage|uart)|tests/(storage|uart))/.*'
+HeaderFilterRegex: '.*(firmware/esp32/(storage|uart)|flipper|tests/(storage|uart))/.*'
 CheckOptions:
   readability-function-size.LineThreshold: '80'
   readability-function-size.NestingThreshold: '4'

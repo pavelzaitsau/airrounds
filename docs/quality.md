@@ -30,14 +30,14 @@ make embedded
 
 `make check` runs every host check below and stops with a nonzero status on
 failure. It never reformats files. `make embedded` requires the pinned SDKs
-from [T0](t0.md); it builds the ESP32 examples, the UART firmware, and the Flipper example. It checks
+from [T0](t0.md); it builds the ESP32 examples, the UART firmware, and the Flipper app. It checks
 each ESP32 image and runs Cppcheck with the target SDK settings.
 
 | Command | Checks |
 | --- | --- |
 | `make format-check` | Formatting of project `.c`, `.cpp`, `.h`, and `.ino` files |
 | `make format` | Applies `.clang-format` to those files |
-| `make test` | C++11 storage and UART tests, Mac PCAP tests, and a check of a T2 capture and receipt |
+| `make test` | C++11 storage, UART, and Flipper client tests, plus Mac PCAP checks |
 | `make asan` | The C++ host tests with AddressSanitizer and UndefinedBehaviorSanitizer |
 | `make tsan` | The C++ host tests with ThreadSanitizer, in separate executables |
 | `make tidy` | Clang-Tidy and its Clang Analyzer checks on the host test translation units |

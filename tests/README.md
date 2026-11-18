@@ -126,7 +126,8 @@ The bridge used 115200 baud, with Flipper pin 13 for TX and pin 14 for RX.
 a split frame, lost replies, link recovery, wrong versions, and delayed
 requests and replies. Reply tests cover cut-off replies and boot text
 before a reply. The tests also check that reception stops before storage
-starts and that the board reports a storage error.
+starts, that a quiet stop reports its final result right away, and that the
+board reports a storage error.
 
 Use the [UART firmware and wiring][uart-protocol] for the hardware check.
 Keep a backup of the current flash before loading the UART image.
@@ -159,7 +160,7 @@ the result for the original session ID.
 
 The saved row records the board's report. A separate Mac check of this run's
 PCAP and receipt is still open. The test used Flipper as a serial bridge.
-The AirRounds Flipper app is [T5b work][flipper-t5b].
+See the [Flipper app checks][flipper-t5b] for the T5b test scope.
 
 Before the test, we read all 4 MiB of flash and verified the backup against
 the device. After the test, we wrote back the full backup and verified the
@@ -170,5 +171,77 @@ The local `artifacts/t5a/hardware/` folder holds the backup and its SHA-256.
 It also holds `uart-gpio-test-final.log`, `restore-gpio-bench-final.log`, and
 `restored-runtime.log`.
 
-[flipper-t5b]: ../flipper/README.md
+[flipper-t5b]: #flipper-app-t5b
 [uart-protocol]: ../docs/uart.md
+
+## Flipper app T5b
+
+`make test` connects the Flipper client to the ESP32 protocol in a host test.
+It checks stop, saving, save success, and a storage error. It drops replies
+to start and stop, then checks recovery without another command. It also
+checks incompatible firmware, late replies, and fresh status after opening
+the screen or restarting the app. It checks that a Stop press applies only
+to the selected visit and that the app reports a rejected command. It also
+checks that a new command uses a fresh ID after a lost write.
+
+`make embedded` builds the app for the pinned Flipper SDK and checks its
+imports. Use the [app guide][flipper-app] to install it for a hardware test.
+
+1. Start a visit and open **Status**. Check that the app shows **Listening**.
+1. Break UART while keeping the ESP32 powered. Check for **UART link lost**.
+1. Reconnect UART and check that the result appears.
+1. Leave **Status** before a visit ends. Return after it ends and check that
+   the screen reports the current result.
+1. Stop a visit while the board is listening. Check the stop and save
+   results. Use a storage fault to check the error result.
+
+### T5b bench results
+
+On November 18, 2026, we ran `airrounds.fap` on a Flipper Zero with firmware
+1.5.1. An ESP32-S2 bench build used its USB port to switch its UART pins
+off and on. The board stayed powered during the link break.
+The bench FAP had this SHA-256 value.
+
+`446eb8dbe5ea769248da3fbe7539f113e65aaa104512aaf1b2af4a7ecbadc6b4`
+
+| Check | Result on Flipper |
+| --- | --- |
+| Start and stop a quiet visit | **Listening**, then **Stopped** and **No beacon** |
+| Disable UART during a new visit | **UART link lost** and **Reconnecting...** |
+| Leave Status and return while UART is down | **UART link lost** |
+| Reconnect UART after about 6.6 s | **Complete** and **No beacon** |
+| Leave Status and open it again | **Complete** and **No beacon** |
+| Run a visit on the approved access point | **Complete** and **Saved** |
+
+The host tests cover the save-in-progress and error messages. The bench
+records the board's saved result. A separate Mac check of the capture and
+receipt is still open.
+
+We restored the earlier 4 MiB flash image after the test. The flash tool
+verified the written data before resetting the ESP32.
+
+The local `artifacts/t5b/hardware/final/` folder holds the screen images,
+`flipper-bench.log`, and `esp-restore.log`.
+
+### Reviewed T5 bench results
+
+On November 18, 2026, we ran the updated Flipper app with the updated ESP32
+protocol. The FAP used for this run had this SHA-256 value.
+
+`cd253558b7b0dbe2b30b82356a4cc63f1b2122da7a50cb42a6ac844775231841`
+
+The ESP32 bench build used its separate USB port to switch the UART pins
+and copy mutation replies to the test log.
+
+| Check | Result |
+| --- | --- |
+| Press **Stop** while Flipper shows **Listening** on the quiet channel | The first ESP32 reply was `stopped` and `not_observed`. Flipper showed **Stopped** and **No beacon**. |
+| Disable UART during a second visit and reopen Status | Flipper showed **UART link lost** while the ESP32 stayed powered. |
+| Reconnect after about 6.6 s | Flipper showed **Complete** and **No beacon**. The result was still visible after leaving Status and opening it again. |
+
+After the run, we restored the earlier 4 MiB ESP32 flash image. The flash
+tool verified the written data and reset the board. The local
+`artifacts/t5/hardware/reviewed/` folder holds the screen images, the UART
+test log, and the flash restore log.
+
+[flipper-app]: ../flipper/README.md

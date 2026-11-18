@@ -81,11 +81,11 @@ def main():
              f"--suppress=missingInclude:{ESP / 'data'}/*",
              f"--suppress=returnTempReference:{ESP / 'data'}/*",
              f"--suppress=duplInheritedMember:{ESP / 'data'}/*"], environment)
-    application = ROOT / "tests/toolchain/flipper"
+    application = ROOT / "flipper"
     run([ufbt], environment, cwd=application)
     destination = OUTPUT / "flipper"
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(application / "dist/airrounds_smoke.fap", destination)
+    shutil.copy2(application / "dist/airrounds.fap", destination)
     # Match the pinned ARM GCC 12.3 SDK and newlib's printf attribute macro.
     # CMSIS uses linker-defined table boundaries that Cppcheck sees as objects.
     run([tool("cppcheck"), *cppcheck_flags,

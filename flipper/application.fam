@@ -1,0 +1,8 @@
+App(
+    appid="airrounds",
+    name="AirRounds",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="airrounds_app",
+    stack_size=4096,
+    fap_category="GPIO",
+)

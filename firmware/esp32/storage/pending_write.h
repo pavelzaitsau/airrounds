@@ -12,6 +12,8 @@ enum class WriteStatus {
     partial,
     no_progress,
     invalid,
+    io_error,
+    idle,
 };
 
 // One caller owns the file, the offset, and the immutable block until it completes.

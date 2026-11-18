@@ -29,6 +29,22 @@ and hardware results separately.
 See [quality checks](quality.md) for `make check`, sanitizer runs, and embedded
 builds. Record host results separately from tests run on physical devices.
 
+## Require signatures on pushes to main
+
+Set up commit signing first. For SSH signatures, put the trusted public
+signing keys in the file set by `gpg.ssh.allowedSignersFile`.
+Run `git verify-commit HEAD` to check that Git trusts your signing key.
+
+Install the hook once per clone.
+
+```sh
+hook=$(git rev-parse --git-path hooks/pre-push)
+test ! -e "$hook" && install -m 755 .githooks/pre-push "$hook"
+```
+
+If you already have a pre-push hook, add this check to it. The hook checks
+the signature of every commit the push adds to the remote `main` branch.
+
 ## Check the working tree
 
 ```sh

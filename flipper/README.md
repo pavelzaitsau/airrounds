@@ -1,49 +1,75 @@
 # AirRounds for Flipper Zero
 
-AirRounds runs a passive round on the ESP32-S2 Wi-Fi Devboard.
-Have the BSSID and channel for one to three approved 2.4 GHz access points.
+AirRounds controls passive Wi-Fi sessions on the ESP32-S2 Wi-Fi Devboard.
+Prepare the BSSID and 2.4 GHz channel of each approved access point.
 
 ## Build and connect
 
-Use the [pinned SDK][sdk] and run `make embedded` from the repository root.
-The app is `artifacts/quality/flipper/airrounds.fap`. Copy it to
-`apps/GPIO/` on the Flipper SD card. Open **Apps → GPIO → AirRounds**.
+Run `make embedded` from the repository root with the [pinned SDK][sdk].
+Copy `artifacts/quality/flipper/airrounds.fap` to `apps/GPIO/` on the Flipper
+SD card and open **Apps → GPIO → AirRounds**.
 
-Load the [AirRounds UART firmware][uart] on the Devboard. Follow the same
-guide for power, ground, and the UART pin connections. On Flipper, close
-the USB-to-UART Bridge before opening AirRounds. Power the Devboard during
-the whole visit.
+Use the [AirRounds firmware and wiring guide][board] for the Devboard.
+Close the Flipper USB-to-UART Bridge before opening AirRounds. Keep
+the Devboard powered during a session.
 
-## Start, stop, and check a round
+One point also works on the older AirRounds board firmware. Two or three
+points require board firmware that supports AirRounds rounds. **Board status**
+explains when the firmware needs an update.
 
-1. Open **Start round**. Enter the first BSSID as 12 hex digits and select **Save**.
-1. Press Left or Right to pick its channel.
-1. To add another access point, press Down. Enter its BSSID and pick its channel.
-1. Press OK when **Start** appears. The board visits the points in the order you entered them.
-1. On **Status**, press OK when **Stop** appears to end the round.
-1. Press Back to return to the menu. Open **Status** to read the results again.
+## Save a profile
 
-Press Back on the channel screen to edit its BSSID. Press Back in the BSSID
-editor to return to the previous screen. The app keeps your entries while
-it is open. Use each BSSID once. With older AirRounds firmware, the app offers
-one access point.
+1. Open **Set up points** or **Access points**.
+1. Choose **Add point** and enter the six BSSID bytes with the hex keyboard.
+1. Select **Save** on the keyboard. Use Left or Right to choose the channel.
+1. Press OK on **Save**. Add up to three points.
 
-For a round with multiple points, **Status** shows one result per BSSID.
-**Saved** means the board checked the file and published its receipt.
-**No beacon** means the board heard no matching beacon during the visit.
-**Skipped** means a stop or an error ended the round before that visit.
+Open a point to edit or remove it. Back from the channel screen returns
+to BSSID entry. Back from BSSID entry discards the draft. The app saves
+one profile on the Flipper card and loads it when the app opens again.
+If the card cannot confirm a write, the app shows **Save not confirmed**.
+If the saved profile changed while the app was open, reopen AirRounds to
+load it before making edits.
 
-## Restore the status after a break
+## Run a session
 
-The board continues its round if the UART link drops or you leave the
-screen. AirRounds checks the connection and reads the board's status when
-the link comes back. It also requests fresh status when you open the screen.
-If a start or stop reply is lost, use the recovered status to decide
-whether to send another command. If **Start rejected** or **Stop rejected**
-appears, press **Refresh** for the current result.
+1. Select **Start session**. Check every BSSID and channel on **Review session**.
+1. Press OK on **Start**. **Observing** shows the active point and channel.
+1. Press OK on **Stop** to stop the session. **Stopping...** waits for the
+   board. **Reception stopped** means reception ended and the board is
+   still finishing the file. **Saving point** means later visits can follow.
+1. Open **Results** to see each point. Select a **Saved** point, then press
+   Right for its file name. Read the lines as one name at the root of the
+   Devboard card.
 
-See the [T6 checks][checks] for host tests and bench steps.
+**Saved** means the board confirmed the closed file and its receipt.
+**Not seen** means the board found no matching beacon. **Stopped** means
+the stop left an unfinished point with no result. A card error or radio
+error has its own label.
 
-[checks]: ../tests/README.md#passive-rounds-t6
+## Recover a session
+
+Back leaves the status screen. Use **Session status** to return.
+AirRounds opens a confirmed active session when the app starts.
+
+If UART drops, the board may finish the session on its own. Reconnect the
+cable to read the board's current state. AirRounds waits for that state
+before offering a new Start or Stop. **Command unconfirmed** means the app
+is still checking what happened. **Last result** shows the latest confirmed
+result available to the app, including after a board restart.
+
+[Design and prototype][design] · [UART protocol][uart]
+
+## Test without a device
+
+Run `python3 tests/flipper/run_ui_emulator.py` from the repository root.
+The headless emulator runs the native app source with simulated Flipper
+services. It uses the AirRounds board protocol and scheduler with a fake
+receiver. The test covers setup and saving, profile reload, three-point
+review, Stop, lost UART, results, and older board firmware. It does not run
+the ARM package or open a USB port.
+
 [sdk]: ../docs/t0.md#flipper-zero
+[board]: ../firmware/esp32/README.md
+[design]: ../docs/ui-ux/requirements.md
 [uart]: ../docs/uart.md

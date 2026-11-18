@@ -152,11 +152,11 @@ private:
         expectsRound_ = false;
         if (kind == Request::start) {
             scope = snapshot_.session + 1U;
-            expectsRound_ = profile->size() > 1;
+            expectsRound_ = supportsRounds_;
             verb = expectsRound_ ? "round" : "start";
         } else if (kind == Request::stop) {
             scope = snapshot_.session;
-            expectsRound_ = round().profile.size() > 1;
+            expectsRound_ = supportsRounds_;
             verb = expectsRound_ ? "round_stop" : "stop";
         } else if (kind == Request::status) {
             expectsRound_ = supportsRounds_;
@@ -227,6 +227,7 @@ private:
             }
             rememberMutation(reply.lastMutation);
             pending_ = Request::none;
+            link_ = Link::connecting;
             wait_ = {now, 0};
             return;
         }

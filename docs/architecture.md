@@ -14,8 +14,8 @@ Each component keeps its own build system.
 
 ESP32 owns the session and reports whether each file was saved. Flipper shows
 the result from the board. The Mac reads the transferred files and compares them
-with the session log. Document the UART protocol and log format in `docs/`
-when the first testable versions are ready.
+with the session log. The [UART protocol](uart.md) defines the board commands,
+replies, and recovery rules.
 
 Use the component directories to pin compatible source revisions and SDKs.
 The [development plan](plan.md) lists the steps and when each is complete.

@@ -13,9 +13,11 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "quality"
-SOURCES = sorted((ROOT / "tests" / "storage").glob("*_test.cpp"))
+SOURCES = sorted(source for folder in ("storage", "uart")
+                 for source in (ROOT / "tests" / folder).glob("*_test.cpp"))
+INCLUDES = [f"-I{ROOT / 'firmware/esp32' / folder}" for folder in ("storage", "session", "uart")]
 FLAGS = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-pedantic", "-Wconversion",
-         "-Wsign-conversion", "-Wshadow", "-pthread", "-I", str(ROOT / "firmware/esp32/storage")]
+         "-Wsign-conversion", "-Wshadow", "-pthread", *INCLUDES]
 
 
 def tool(name):
@@ -105,7 +107,7 @@ def cppcheck():
         run([tool("cppcheck"), "--std=c++11", f"--platform={platform}",
              "--enable=warning,style,performance,portability,missingInclude", "--error-exitcode=1",
              "--inline-suppr", "--suppress=missingIncludeSystem", "--library=posix",
-             *defines, "-I", ROOT / "firmware/esp32/storage", *SOURCES])
+             *defines, *INCLUDES, *SOURCES])
 
 
 def analyze():

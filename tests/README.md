@@ -6,9 +6,21 @@ This directory holds component and interface tests. See the
 The [toolchain examples](toolchain) check the cross-compilers and packaging.
 See the [T0 build commands](../docs/t0.md).
 
+## Mac PCAP checks
+
+`make test` runs the Mac checks and verifies a capture with a receipt from T2.
+Run the Mac tests on their own from the repository root.
+
+```sh
+python3 -m unittest -v tests.mac.test_check_pcap
+```
+
+See the [Mac tool guide](../tools/mac/README.md) for the T3 samples and
+the independent `tcpdump` check.
+
 ## SD writes and PCAP finalization
 
-Run all storage tests from the repository root:
+Run the host tests from the repository root.
 
 ```sh
 make test

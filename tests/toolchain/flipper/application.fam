@@ -1,0 +1,8 @@
+App(
+    appid="airrounds_smoke",
+    name="AirRounds Smoke",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="airrounds_smoke_app",
+    stack_size=1024,
+    fap_category="Tools",
+)

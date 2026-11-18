@@ -18,4 +18,7 @@ dist/
 *.pcap
 *.pcapng
 
+/.airrounds-tools/
+/tests/toolchain/flipper/.vscode/compile_commands.json
+
 node_modules/

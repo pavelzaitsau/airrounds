@@ -2,7 +2,8 @@
 
 This plan covers passive diagnostics. It draws on the
 November 18, 2026 project plan.
-At the time of review, the repository contains the starter layout and docs.
+Both toolchains are installed and produced test `.bin` and `.fap` files.
+See the [T0 report](t0.md) for the results and open checks.
 
 ## Bench and first release
 

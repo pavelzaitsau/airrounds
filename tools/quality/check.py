@@ -63,17 +63,22 @@ def tests(mode):
         environment["UBSAN_OPTIONS"] = "halt_on_error=1:print_stacktrace=1"
     elif mode == "tsan":
         environment["TSAN_OPTIONS"] = "halt_on_error=1"
+    captures = {
+        "pcap_capture_test": ("first.pcap", []),
+        "passive_session_test": ("passive.pcap", ["--bssid", "02:00:00:00:00:01"]),
+    }
     for source in SOURCES:
         binary = directory / source.stem
         run([tool("clang++"), *FLAGS, *flags, source, "-o", binary])
         # Each execution needs new filenames for the exclusive-create tests.
         with tempfile.TemporaryDirectory(prefix="airrounds-test-") as temporary:
             run([binary, temporary], env=environment)
-            if mode == "test" and source.stem == "pcap_capture_test":
-                capture = Path(temporary) / "first.pcap"
-                run([tool("tcpdump"), "-nn", "-r", capture])
+            if mode == "test" and source.stem in captures:
+                filename, options = captures[source.stem]
+                capture = Path(temporary) / filename
+                run([tool("tcpdump"), "-nn", "-e", "-r", capture])
                 run([sys.executable, ROOT / "tools/mac/check_pcap.py", capture,
-                     "--receipt", Path(temporary) / "first.pcap.ok"])
+                     "--receipt", Path(temporary) / (filename + ".ok"), *options])
     if mode == "test":
         run([sys.executable, "-m", "unittest", "tests.mac.test_check_pcap"])
 

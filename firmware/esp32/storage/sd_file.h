@@ -4,10 +4,14 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace airrounds {
 namespace storage {
+
+enum class FilePresence { missing, present, error };
 
 class SdFile {
 public:
@@ -16,24 +20,52 @@ public:
     SdFile& operator=(const SdFile&) = delete;
 
     ~SdFile() {
-        if (descriptor_ >= 0) {
-            ::close(descriptor_);
-        }
+        close();
     }
 
     bool openNew(const char* path) {
-        if (descriptor_ >= 0) {
-            lastError_ = EBUSY;
-            return false;
-        }
-        if (path == nullptr || *path == '\0') {
-            lastError_ = EINVAL;
-            return false;
-        }
+        return open(path, O_WRONLY | O_CREAT | O_EXCL);
+    }
 
-        descriptor_ = ::open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
-        lastError_ = descriptor_ < 0 ? errno : 0;
-        return descriptor_ >= 0;
+    bool openRead(const char* path) {
+        if (!open(path, O_RDONLY | O_NONBLOCK)) {
+            return false;
+        }
+        struct stat info;
+        if (::fstat(descriptor_, &info) == 0 && S_ISREG(info.st_mode)) {
+            return true;
+        }
+        close();
+        return false;
+    }
+
+    ssize_t read(uint8_t* data, size_t size) {
+        return ::read(descriptor_, data, size);
+    }
+
+    bool sync() {
+        return ::fsync(descriptor_) == 0;
+    }
+
+    bool close() {
+        if (descriptor_ < 0) {
+            return true;
+        }
+        const int descriptor = descriptor_;
+        descriptor_ = -1;
+        return ::close(descriptor) == 0;
+    }
+
+    static FilePresence probe(const char* path) {
+        struct stat info;
+        if (::stat(path, &info) != 0) {
+            return errno == ENOENT ? FilePresence::missing : FilePresence::error;
+        }
+        return S_ISREG(info.st_mode) ? FilePresence::present : FilePresence::error;
+    }
+
+    static bool publish(const char* from, const char* to) {
+        return probe(to) == FilePresence::missing && ::rename(from, to) == 0;
     }
 
     explicit operator bool() const { return descriptor_ >= 0; }
@@ -54,6 +86,20 @@ public:
     }
 
 private:
+    bool open(const char* path, int flags) {
+        if (descriptor_ >= 0) {
+            lastError_ = EBUSY;
+            return false;
+        }
+        if (path == nullptr || *path == '\0') {
+            lastError_ = EINVAL;
+            return false;
+        }
+        descriptor_ = ::open(path, flags, 0600);
+        lastError_ = descriptor_ < 0 ? errno : 0;
+        return descriptor_ >= 0;
+    }
+
     int descriptor_ = -1;
     int lastError_ = 0;
 };

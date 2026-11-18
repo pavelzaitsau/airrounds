@@ -1,6 +1,6 @@
 # ESP32-S2 Wi-Fi Devboard
 
-The storage writer saves blocks to a new file on a mounted microSD card.
+The storage writer writes blocks to a new file on a mounted microSD card.
 The [toolchain example](../../tests/toolchain/esp32/airrounds_storage_smoke)
 connects the writer to the Arduino SD library.
 
@@ -30,5 +30,38 @@ per call. Keep the file attached to the same queue while blocks are pending.
 | `invalid` | The write count was outside the requested range. |
 
 After `io_error` or `invalid`, the queue keeps the front block and stops
-writing. The caller can read the file error and end the session. T2 checks
-the file after close before reporting it as saved.
+writing. The caller can read the file error and end the session.
+
+## Finish a PCAP
+
+Create one [`PcapCapture`](storage/pcap_capture.h) per capture. Give each capture
+its own path in the session directory. `open()` refuses to replace an existing
+capture. Queue a classic PCAP 2.4 header and record bytes. Both byte orders and
+both timestamp resolutions work. The file needs at least one record with
+payload bytes.
+
+Stop the producer before calling `finish()`. The writer drains the queue,
+syncs the file, and closes it. It reopens the file to check the header, record
+boundaries, byte count, and CRC-32. If a block was dropped, the capture stays
+`incomplete`.
+
+A successful check writes a small receipt. For `visit.pcap`, the writer
+syncs, closes, and checks `visit.pcap.ok.part` before renaming it to
+`visit.pcap.ok`. The receipt holds the PCAP byte count and CRC-32. A file error
+returns `error` and leaves the data for diagnosis.
+
+## Check after restart
+
+Mount the card and call `recoverPcap(path)`.
+
+| State | What AirRounds found |
+| --- | --- |
+| `saved` | The final receipt and PCAP agree. |
+| `incomplete` | A capture has no final receipt, or the staged receipt is still present. |
+| `error` | A file check failed, or the final receipt has no matching PCAP. |
+| `missing` | The PCAP and both receipt files are absent. |
+
+Recovery checks the files in place. Use a new capture path after an incomplete
+visit. Keep the receipt with the PCAP when moving the files. This check covers
+the file structure and bytes. Later stages check what the records contain and
+write the session log.

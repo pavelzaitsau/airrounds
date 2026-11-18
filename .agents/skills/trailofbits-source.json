@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/trailofbits/skills",
+  "revision": "149d7b21f4067765b82e67029730b42d228ef4b4",
+  "license": "CC-BY-SA-4.0",
+  "skills": {
+    "harness-writing": "plugins/testing-handbook-skills/skills/harness-writing",
+    "libfuzzer": "plugins/testing-handbook-skills/skills/libfuzzer",
+    "sharp-edges": "plugins/sharp-edges/skills/sharp-edges"
+  },
+  "note": "Installed upstream files are unmodified; see TRAILOFBITS-LICENSE."
+}

@@ -12,15 +12,14 @@ class Crc32 {
 public:
     void update(const uint8_t* data, size_t size) {
         static constexpr uint32_t table[] = {
-            0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac,
-            0x76dc4190, 0x6b6b51f4, 0x4db26158, 0x5005713c,
-            0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
+            0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac, 0x76dc4190, 0x6b6b51f4,
+            0x4db26158, 0x5005713c, 0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
             0x9b64c2b0, 0x86d3d2d4, 0xa00ae278, 0xbdbdf21c,
         };
         for (size_t index = 0; index < size; ++index) {
             value_ ^= data[index];
-            value_ = (value_ >> 4) ^ table[value_ & 0xf];
-            value_ = (value_ >> 4) ^ table[value_ & 0xf];
+            value_ = (value_ >> 4U) ^ table[value_ & 0xfU];
+            value_ = (value_ >> 4U) ^ table[value_ & 0xfU];
         }
     }
 
@@ -30,15 +29,14 @@ private:
     uint32_t value_ = UINT32_MAX;
 };
 
-template <typename File>
-bool readExact(File& file, uint8_t* data, size_t size) {
+template <typename File> bool readExact(File& file, uint8_t* data, size_t size) {
     while (size != 0) {
         const auto count = file.read(data, size);
         if (count <= 0 || static_cast<size_t>(count) > size) {
             return false;
         }
         data += count;
-        size -= count;
+        size -= static_cast<size_t>(count);
     }
     return true;
 }
@@ -46,13 +44,14 @@ bool readExact(File& file, uint8_t* data, size_t size) {
 inline uint32_t readNumber(const uint8_t* bytes, size_t size, bool littleEndian) {
     uint32_t value = 0;
     for (size_t index = 0; index < size; ++index) {
-        value = (value << 8) | bytes[littleEndian ? size - 1 - index : index];
+        value = (value << 8U) | bytes[littleEndian ? size - 1 - index : index];
     }
     return value;
 }
 
-template <typename File>
-bool validate(File& file, uint64_t expectedSize, uint32_t expectedCrc) {
+// Keep the existing size/CRC template API; both values are checked by callers.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+template <typename File> bool validate(File& file, uint64_t expectedSize, uint32_t expectedCrc) {
     uint8_t header[24];
     if (expectedSize < sizeof(header) || !readExact(file, header, sizeof(header))) {
         return false;
@@ -106,6 +105,6 @@ bool validate(File& file, uint64_t expectedSize, uint32_t expectedCrc) {
     return crc.value() == expectedCrc && file.read(buffer, 1) == 0;
 }
 
-}  // namespace pcap
-}  // namespace storage
-}  // namespace airrounds
+} // namespace pcap
+} // namespace storage
+} // namespace airrounds

@@ -24,6 +24,11 @@ Both toolchains produce test artifacts. Builds of the working components and
 compatibility with the firmware on the bench still need checking. Record Mac
 and hardware results separately.
 
+## Automated quality checks
+
+See [quality checks](quality.md) for `make check`, sanitizer runs, and embedded
+builds. Record host results separately from tests run on physical devices.
+
 ## Check the working tree
 
 ```sh

@@ -3,12 +3,12 @@
 #include <iostream>
 #include <string>
 
-#include "../../flipper/session_client.h"
-#include "../../flipper/visit_labels.h"
+#include "../../flipper/ui_state.h"
 #include "uart_protocol.h"
 
 namespace {
 using airrounds::flipper::Link;
+using airrounds::flipper::Request;
 using airrounds::flipper::SessionClient;
 using namespace airrounds::uart;
 
@@ -98,9 +98,6 @@ void stopAndSave() {
     link.receive(link.deliver());
     assert(link.client.state() == State::finalizing);
     assert(link.client.outcome() == Outcome::none);
-    auto labels = airrounds::flipper::visitLabels(link.client);
-    assert(std::string(labels.state) == "Reception stopped");
-    assert(std::string(labels.detail) == "Saving...");
     assert(!link.client.stop(link.client.visitId(), link.now));
     link.visit.outcome = Outcome::saved;
     link.board.poll();
@@ -109,9 +106,6 @@ void stopAndSave() {
     link.receive(link.deliver());
     assert(link.client.state() == State::stopped);
     assert(link.client.outcome() == Outcome::saved);
-    labels = airrounds::flipper::visitLabels(link.client);
-    assert(std::string(labels.state) == "Stopped");
-    assert(std::string(labels.detail) == "Saved");
     assert(link.visit.starts == 1 && link.visit.stops == 1);
 }
 
@@ -153,7 +147,7 @@ void newCommandAfterDroppedWrite() {
     assert(link.visit.starts == 0);
     assert(link.client.start(target, link.now));
     assert(link.outbound != dropped);
-    assert(link.outbound.find(" 0000000000000002 00000001 start ") != std::string::npos);
+    assert(link.outbound.find(" 0000000000000002 00000001 round ") != std::string::npos);
     link.receive(link.deliver());
     assert(link.visit.starts == 1);
 }
@@ -196,11 +190,11 @@ void commandRejectionStaysVisible() {
     link.client.poll(link.now);
     link.receive(link.deliver());
     assert(link.client.state() == State::running);
-    assert(std::string(airrounds::flipper::visitLabels(link.client).state) == "Start rejected");
+    assert(link.client.rejected() == Request::start);
     link.client.refresh(link.now);
     link.client.poll(link.now);
     link.receive(link.deliver());
-    assert(std::string(airrounds::flipper::visitLabels(link.client).state) == "Listening");
+    assert(link.client.rejected() == Request::none);
     assert(link.visit.starts == 1);
 }
 
@@ -223,9 +217,6 @@ void freshStatusAfterReturn() {
     assert(link.client.link() == Link::ready);
     assert(link.client.state() == State::error);
     assert(link.client.outcome() == Outcome::storage_error);
-    const auto labels = airrounds::flipper::visitLabels(link.client);
-    assert(std::string(labels.state) == "Error");
-    assert(std::string(labels.detail) == "SD save failed");
 
     // Reopen the app with a fresh nonce while the same board stays powered.
     link.client = SessionClient(Loopback::write, &link, 0x90);
@@ -272,7 +263,6 @@ void loseStopReplyDuringSave() {
     assert(link.visit.stops == 1);
 }
 void roundStopWhileSavingAndReconnect() {
-    using airrounds::flipper::roundSlotLabel;
     Loopback link;
     link.handshake();
     airrounds::session::Profile profile;
@@ -286,8 +276,7 @@ void roundStopWhileSavingAndReconnect() {
     const auto start = link.deliver();
     link.receive(start);
     assert(link.client.round().profile.matches(profile));
-    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Listening");
-    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 2)) == "Waiting");
+    assert(link.client.round().next() == 0);
 
     link.visit.done = true;
     link.board.poll();
@@ -302,7 +291,6 @@ void roundStopWhileSavingAndReconnect() {
     assert(link.client.state() == State::running);
     link.receive(status);
     assert(link.client.state() == State::finalizing);
-    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Saving...");
     assert(link.client.stop(link.client.visitId(), link.now));
     const auto lostStop = link.deliver();
     assert(lostStop.find("finalizing none") != std::string::npos);
@@ -314,8 +302,30 @@ void roundStopWhileSavingAndReconnect() {
     link.handshake();
     assert(link.client.state() == State::stopped);
     assert(link.client.round().profile.matches(profile));
-    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 0)) == "Saved");
-    assert(std::string(roundSlotLabel(link.client.round(), link.client.state(), 2)) == "Skipped");
+    airrounds::flipper::RunReport report;
+    report.id = link.client.visitId();
+    report.state = link.client.state();
+    report.outcome = link.client.outcome();
+    report.round = link.client.round();
+    assert(airrounds::flipper::savedPoints(report) == 1);
+    const auto last = airrounds::flipper::pointOutcome(report, 2);
+    assert(std::string(airrounds::flipper::pointResult(last, report.state)) == "Stopped");
+}
+
+void singlePointKeepsItsAddressAfterReopenAndStop() {
+    Loopback link;
+    link.handshake();
+    assert(link.client.start(target, link.now));
+    assert(link.outbound.find(" round ") != std::string::npos);
+    link.receive(link.deliver());
+    link.client = SessionClient(Loopback::write, &link, 0x90);
+    link.handshake();
+    assert(link.client.round().profile.size() == 1);
+    assert(link.client.stop(link.client.visitId(), link.now));
+    assert(link.outbound.find(" round_stop\n") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.round().profile.size() == 1);
+    assert(airrounds::session::sameAddress(link.client.round().profile[0], target));
 }
 
 airrounds::session::Profile twoPointProfile() {
@@ -447,6 +457,7 @@ int main() try {
     roundRepliesKeepTheRequestedProfile();
     roundRepliesKeepFinishedResults();
     nextRoundCanUseAnotherProfile();
+    singlePointKeepsItsAddressAfterReopenAndStop();
     oldFirmwareKeepsSingleVisit();
     std::cout << "Flipper client checks passed\n";
 } catch (const std::exception& error) {

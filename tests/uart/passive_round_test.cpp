@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-#include "../../firmware/esp32/airrounds_uart/capture_path.h"
+#include "../../firmware/esp32/uart/capture_path.h"
 #include "passive_session.h"
 
 namespace {

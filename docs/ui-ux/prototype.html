@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AirRounds · Flipper Zero prototype</title>
+    <link rel="stylesheet" href="prototype.css">
+    <script defer src="prototype.js"></script>
+    <script defer src="prototype-font.js"></script>
+    <script defer src="prototype-ui.js"></script>
+</head>
+<body>
+    <main>
+        <header class="intro">
+            <p class="platform">Flipper Zero prototype</p>
+            <h1>AirRounds</h1>
+            <p>Use the Flipper keys to navigate. Step through board events to test Stop and link loss.</p>
+        </header>
+
+        <div class="workbench">
+            <section class="device-area" aria-label="Flipper controls">
+                <div class="device">
+                    <div class="device-top">
+                        <span>128 × 64</span>
+                    </div>
+                    <div class="bezel">
+                        <canvas id="lcd" width="128" height="64" aria-label="Simulated monochrome display"
+                            aria-describedby="screen-description"></canvas>
+                        <p id="screen-description" class="sr-only" role="status" aria-atomic="true"></p>
+                    </div>
+
+                    <div class="button-deck">
+                        <div class="dpad" aria-label="Directional pad" role="group">
+                            <button class="face-key up" type="button" data-key="up" aria-label="Up">▲</button>
+                            <button class="face-key left" type="button" data-key="left" aria-label="Left">◀</button>
+                            <button class="face-key ok" type="button" data-key="ok" aria-label="OK">OK</button>
+                            <button class="face-key right" type="button" data-key="right" aria-label="Right">▶</button>
+                            <button class="face-key down" type="button" data-key="down" aria-label="Down">▼</button>
+                        </div>
+                        <button class="face-key back" type="button" data-key="back" aria-label="Back">↩ <span>Back</span></button>
+                    </div>
+                </div>
+                <p class="key-guide">
+                    <span><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> Move</span>
+                    <span><kbd>Enter</kbd> OK</span>
+                    <span><kbd>Esc</kbd> Back</span>
+                </p>
+            </section>
+
+            <section class="simulator" aria-labelledby="simulator-title">
+                <h2 id="simulator-title">Devboard simulator</h2>
+                <div class="link-row">
+                    <span>UART</span>
+                    <span class="link-state" id="link-state" role="status"></span>
+                </div>
+                <button class="sim-button" type="button" id="link-toggle">Disconnect UART</button>
+
+                <div class="board-event">
+                    <p class="event-label">Board event</p>
+                    <button class="sim-button primary" type="button" id="step">No pending event</button>
+                    <p id="event-state" class="sr-only" role="status"></p>
+                    <p class="hint">The board can keep running while UART is disconnected.</p>
+                </div>
+
+                <div class="presets" aria-label="Reset the simulator" role="group">
+                    <button class="sim-button" type="button" id="demo-profile">Reset demo</button>
+                    <button class="sim-button" type="button" id="empty-profile">Empty profile</button>
+                </div>
+                <p id="storage-note" class="hint" role="status" hidden></p>
+            </section>
+        </div>
+    </main>
+</body>
+</html>

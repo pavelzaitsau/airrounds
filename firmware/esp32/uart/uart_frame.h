@@ -7,7 +7,7 @@
 namespace airrounds {
 namespace uart {
 
-constexpr size_t frameCapacity = 80;
+constexpr size_t frameCapacity = 100;
 constexpr uint64_t readRequestBit = uint64_t{1} << 63U;
 
 struct TimedByte {
@@ -102,7 +102,8 @@ private:
 
 constexpr uint64_t version = 1;
 constexpr unsigned passiveVisitFeature = 1;
-constexpr unsigned features = passiveVisitFeature;
+constexpr unsigned passiveRoundFeature = 2;
+constexpr unsigned features = passiveVisitFeature | passiveRoundFeature;
 
 struct ReplyKey {
     uint64_t boot;

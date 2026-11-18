@@ -86,11 +86,22 @@ visit reports `not_observed`. A card or file error reports `storage_error`.
 See the [T4 checks](../../tests/README.md#one-passive-access-point) for
 the host test and the bench commands.
 
-## Control a visit over UART
+## Run a round over UART
 
 Build the `airrounds_uart` sketch with `make embedded`. The image is under
 `artifacts/quality/esp32/airrounds_uart/`. It listens on the Devboard's UART
-pins and writes captures to the microSD card. See the [UART protocol][uart]
-for wiring and commands.
+pins and writes captures to the microSD card.
+
+The board copies the profile when it accepts a round. It visits each BSSID
+once, on the channel in the profile. Points on the same channel have separate
+visits. Each visit ends after a matching beacon or 5 s of listening. A round
+with three points spends up to 15 s listening, plus radio setup and SD time.
+
+The board closes and checks a capture before starting the next visit.
+A quiet point produces no file. A radio or SD error ends the round.
+Earlier save results stay available in UART status until the next round
+or a reboot. The PCAP files and receipts stay on the card.
+
+See the [UART protocol][uart] for wiring, commands, and file names.
 
 [uart]: ../../docs/uart.md

@@ -29,7 +29,7 @@ public:
         receiving = false;
         return radioStops;
     }
-    void beginSave(VisitId id) override {
+    void beginSave(const CaptureId& id) override {
         assert(!receiving);
         saveId = id;
         ++saves;
@@ -44,7 +44,7 @@ public:
     bool radioStarts = true;
     bool radioStops = true;
     Outcome result = Outcome::none;
-    VisitId saveId{};
+    CaptureId saveId{};
 };
 
 class Wire {
@@ -75,13 +75,13 @@ void negotiationAndValidation() {
     Wire wire;
     assert(wire.send("@01 0000000000000000 8000000000000011 00000000 hello\n") ==
            "!01 123456789abcdef0 8000000000000011 00000000 ok 00000000 idle none 0000000000000000 "
-           "01\n");
+           "03\n");
     assert(wire.command("0000000000000012 00000001 start 020000000001 06", "02") ==
            "!02 123456789abcdef0 0000000000000012 00000001 unsupported_version 00000000 idle none "
-           "0000000000000000 01\n");
+           "0000000000000000 03\n");
     assert(wire.send("@01 0000000000000000 0000000000000013 00000001 start 020000000001 06\n") ==
            "!01 0000000000000000 0000000000000013 00000001 wrong_boot 00000000 idle none "
-           "0000000000000000 01\n");
+           "0000000000000000 03\n");
     assert(wire.command("0000000000000014 00000001 start 010000000001 06").find("bad_target") !=
            std::string::npos);
     assert(wire.command("0000000000000015 00000001 start 020000000001 0e").find("bad_target") !=
@@ -104,7 +104,7 @@ void retriesAndSave() {
     const char* stop = "0000000000000025 00000001 stop";
     const std::string running = wire.command(start);
     assert(running == "!01 123456789abcdef0 0000000000000020 00000001 ok 00000001 running none "
-                      "0000000000000020 01\n");
+                      "0000000000000020 03\n");
     assert(wire.command(start) == running);
     assert(wire.command(stop, "02").find("unsupported_version") != std::string::npos);
     assert(wire.visit.stops == 0);
@@ -114,7 +114,7 @@ void retriesAndSave() {
            std::string::npos);
     const std::string stopped = wire.command(stop);
     assert(stopped == "!01 123456789abcdef0 0000000000000025 00000001 ok 00000001 finalizing none "
-                      "0000000000000025 01\n");
+                      "0000000000000025 03\n");
     assert(wire.command(stop) == stopped);
     assert(wire.command("8000000000000024 00000000 status").find("00000001 finalizing none") !=
            std::string::npos);
@@ -126,7 +126,7 @@ void retriesAndSave() {
            std::string::npos);
     assert(wire.command(start).find("00000001 stopped saved") != std::string::npos);
     assert(wire.visit.starts == 1 && wire.visit.stops == 1 && wire.visit.saves == 1);
-    assert(wire.visit.saveId.boot == boot && wire.visit.saveId.session == 1);
+    assert(wire.visit.saveId.visit.matches({boot, 1}) && wire.visit.saveId.slot == 0);
 }
 
 void quietStopCompletesInReply() {
@@ -242,6 +242,117 @@ void replayAfterStateChange() {
     assert(wire.visit.starts == 2 && wire.visit.stops == 1);
 }
 
+void roundRejectsInvalidProfiles() {
+    Wire wire;
+    assert(wire.command("0000000000000001 00000001 round").find("bad_request") !=
+           std::string::npos);
+    assert(wire.command("0000000000000002 00000001 round 020000000001 06 020000000001 0b")
+               .find("bad_target") != std::string::npos);
+    assert(wire.command("0000000000000003 00000001 round 020000000001 06 020000000002 0e")
+               .find("bad_target") != std::string::npos);
+    assert(wire.command("0000000000000004 00000001 round 020000000001 06 020000000002 0b "
+                        "020000000003 01 020000000004 0d")
+               .empty());
+    assert(wire.visit.starts == 0);
+}
+
+void roundCompletesEverySlot() {
+    Wire wire;
+    const char* start =
+        "0000000000000001 00000001 round 020000000001 06 020000000002 06 020000000003 0b";
+    const char* status = "8000000000000002 00000000 round_status";
+    assert(wire.command(start).find("ok 00000001 running none") != std::string::npos);
+    assert(wire.command(start).find("ok 00000001 running none") != std::string::npos);
+    assert(wire.visit.starts == 1);
+    wire.visit.done = true;
+    wire.protocol.poll();
+    assert(wire.command(status).find("finalizing none") != std::string::npos);
+    assert(wire.visit.starts == 1 && wire.visit.saveId.slot == 1);
+    assert(wire.command("0000000000000003 00000001 round 020000000002 06 020000000001 06 "
+                        "020000000003 0b")
+               .find("conflict") != std::string::npos);
+    wire.visit.result = Outcome::saved;
+    wire.protocol.poll();
+    assert(wire.visit.starts == 2);
+    wire.visit.done = true;
+    wire.visit.result = Outcome::not_observed;
+    wire.protocol.poll();
+    assert(wire.visit.starts == 3);
+    wire.visit.done = true;
+    wire.visit.result = Outcome::saved;
+    wire.protocol.poll();
+    assert(wire.command(status).find("complete saved") != std::string::npos);
+    assert(wire.visit.starts == 3 && wire.visit.stops == 3 && wire.visit.saves == 3);
+    assert(wire.visit.saveId.visit.matches({boot, 1}) && wire.visit.saveId.slot == 3);
+    Reply parsed;
+    const auto completed = wire.command(status);
+    const bool valid = readReply(completed.c_str(), parsed);
+    assert(valid);
+    assert(parsed.hasRound && parsed.round.profile.size() == 3 && parsed.round.next() == 3);
+    assert(parsed.round.results[0] == Outcome::saved &&
+           parsed.round.results[1] == Outcome::not_observed &&
+           parsed.round.results[2] == Outcome::saved);
+    const auto legacy = wire.command("8000000000000004 00000000 status");
+    const bool legacyValid = readReply(legacy.c_str(), parsed);
+    assert(legacyValid && !parsed.hasRound);
+    auto invalid = completed;
+    invalid[invalid.size() - 2] = 'f';
+    const bool invalidAccepted = readReply(invalid.c_str(), parsed);
+    assert(!invalidAccepted);
+    auto surplus = completed;
+    surplus.insert(surplus.size() - 1, " 020000000004061");
+    const bool surplusAccepted = readReply(surplus.c_str(), parsed);
+    assert(!surplusAccepted);
+}
+
+void roundKeepsItsActiveVisit() {
+    Visit visit;
+    PassiveRound round(visit);
+    airrounds::session::Profile profile;
+    const bool emptyAccepted = round.start({boot, 1}, profile);
+    assert(!emptyAccepted && round.state() == State::idle && visit.starts == 0);
+
+    const bool valid = profile.add({{2, 0, 0, 0, 0, 1}, 6});
+    assert(valid);
+    const bool started = round.start({boot, 1}, profile);
+    const bool startedWhileRunning = round.start({boot, 2}, profile);
+    assert(started && !startedWhileRunning && round.state() == State::running && visit.starts == 1);
+
+    visit.done = true;
+    round.poll();
+    assert(round.state() == State::finalizing && visit.saveId.visit.matches({boot, 1}));
+    const bool startedWhileSaving = round.start({boot, 2}, profile);
+    assert(!startedWhileSaving && round.state() == State::finalizing && visit.starts == 1);
+
+    visit.result = Outcome::saved;
+    round.poll();
+    assert(round.state() == State::complete);
+    const bool restarted = round.start({boot, 2}, profile);
+    assert(restarted && round.state() == State::running && visit.starts == 2);
+}
+
+void roundStopsOnStorageError() {
+    Wire wire;
+    const auto start = wire.command(
+        "0000000000000001 00000001 round 020000000001 01 020000000002 06 020000000003 0b");
+    assert(start.find("running none") != std::string::npos);
+    wire.visit.done = true;
+    wire.visit.result = Outcome::saved;
+    wire.protocol.poll();
+    wire.visit.done = true;
+    wire.visit.result = Outcome::storage_error;
+    wire.protocol.poll();
+    Reply reply;
+    const auto status = wire.command("8000000000000002 00000001 round_status");
+    const bool valid = readReply(status.c_str(), reply);
+    assert(valid);
+    assert(reply.state == State::error && reply.outcome == Outcome::storage_error);
+    assert(reply.round.results[0] == Outcome::saved);
+    assert(reply.round.results[1] == Outcome::storage_error);
+    assert(reply.round.results[2] == Outcome::none);
+    assert(wire.visit.starts == 2 && wire.visit.saves == 2);
+}
+
 void failures() {
     Wire wire;
     wire.visit.radioStarts = false;
@@ -274,7 +385,11 @@ int main() try {
     staleTraffic();
     replayAfterStateChange();
     failures();
-    std::cout << "UART protocol: 8 groups passed\n";
+    roundRejectsInvalidProfiles();
+    roundCompletesEverySlot();
+    roundStopsOnStorageError();
+    roundKeepsItsActiveVisit();
+    std::cout << "UART protocol: 12 groups passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

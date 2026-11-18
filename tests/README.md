@@ -244,4 +244,98 @@ tool verified the written data and reset the board. The local
 `artifacts/t5/hardware/reviewed/` folder holds the screen images, the UART
 test log, and the flash restore log.
 
+## Passive rounds T6
+
+`make test` runs the round scheduler with the production beacon filter and
+file writer. It supplies three BSSIDs on channel 6, then three on distinct
+channels. It checks that each saved PCAP contains the expected beacon and
+has a valid receipt. A third case moves the middle BSSID off its configured
+channel. That visit times out with no file, and the third point still saves.
+A quiet round ends when both visit windows expire. The Mac checker
+and `tcpdump` also read all eight saved test captures.
+
+The UART and Flipper tests cover empty and duplicate profiles, a changed
+request order, replies from older firmware, and recovery after a lost reply.
+They check that a stop during a save preserves the file and skips later
+points. They also check that an SD error ends the round. The scheduler tests
+reject a new start during listening or saving. The client tests reject
+replies that change the round's access points or finished results.
+
+### Bench steps
+
+1. Enter three approved access points in Flipper. Use one channel for all three.
+1. Run the round. Check that each BSSID has its own result and capture.
+1. Run with three distinct channels. Check the results in request order.
+1. Use a different channel for the middle point and run again. Check for
+   **No beacon** followed by a result for the last point.
+1. Copy the PCAPs and receipts. Run the [Mac checker][mac-checker] on each file with its BSSID.
+
+### T6 bench results
+
+On November 18, 2026, a Mac sent T6 commands to an ESP32-S2 over USB.
+A temporary bench build used the production round, radio, and microSD code.
+It also let the Mac read files from the card over USB. The same access point
+was first in all three rounds.
+
+| Case | Channels in visit order | Visit results | Round time |
+| --- | --- | --- | --- |
+| Three points on one channel | 11, 11, 11 | Saved, Saved, Saved | 4.13 s |
+| Three points on distinct channels | 11, 4, 1 | Saved, Saved, Saved | 5.10 s |
+| Middle point unavailable on its configured channel | 11, 11, 1 | Saved, No beacon, Saved | 8.00 s |
+
+In the last run, the middle BSSID still used channel 4. The ESP32 listened
+on channel 11 for that visit. The card held no PCAP or receipt for slot 2.
+The last visit still saved its beacon.
+
+The Mac checker matched all eight PCAPs to their expected BSSID and receipt.
+`tcpdump` showed one beacon per file, with the expected BSSID and channel.
+
+The first Flipper screen check lost its USB connection. On a repeat with
+firmware 1.5.1, the T6 app opened **Status** and showed **Ready**. The console
+reported 121,880 bytes of free heap during the repeat launch. The cause of
+the first failure remains open.
+
+We restored the original 4 MiB ESP32 image, verified it against the backup,
+and reset the board. The local `artifacts/t6/hardware/` folder holds the
+captures, receipts, UART replies, and bench logs.
+
+### T6 rounds started on Flipper
+
+On November 18, 2026, we repeated the three cases after review. AirRounds
+ran on a Flipper Zero with firmware 1.5.1. The Mac sent button presses to
+the Flipper interface. AirRounds sent each round to the ESP32-S2 over UART.
+The Mac read status and copied the files from microSD over the ESP32 bench
+USB port.
+
+Two points from the earlier shared-channel list timed out on the first
+attempt. We ran a fresh passive scan and selected three visible points on
+channel 11.
+
+We started AirRounds again for each case. Flipper's `top` sampled memory
+about once per second. We kept the samples where the ESP32 reported that
+the round was listening or saving. The stack value shows the least free
+space on the 4,092-byte AirRounds thread stack since launch. The heap
+value is the smallest free-heap sample for the whole Flipper.
+
+| Case | Channels | Results in visit order | Active samples | Min. stack free | Min. sampled heap free |
+| --- | --- | --- | --- | --- | --- |
+| Three points on one channel | 11, 11, 11 | Saved, Saved, Saved | 6 | 2,212 B | 118,784 B |
+| Three points on distinct channels | 11, 4, 1 | Saved, Saved, Saved | 3 | 2,284 B | 118,832 B |
+| Middle point unavailable | 11, 11, 1 | Saved, No beacon, Saved | 7 | 2,280 B | 118,752 B |
+
+For the last case, the middle point broadcast on channel 4 while Flipper
+requested channel 11. AirRounds showed **No beacon** for that point and
+**Saved** for the third. The card held no PCAP or receipt for the middle
+point. The Mac checker and `tcpdump` confirmed the BSSID, channel, and
+single beacon in all eight PCAPs. Each PCAP matched its receipt.
+
+AirRounds stayed open and showed **Complete** after every round. Flipper
+uptime increased through all three runs. We removed the temporary app
+copy, then restored and verified the original ESP32 image.
+
+The local `artifacts/t6/flipper-hardware/reviewed/` folder holds the screen
+images, memory samples, UART replies, PCAPs, and receipts.
+
+[mac-checker]: ../tools/mac/README.md
+
 [flipper-app]: ../flipper/README.md

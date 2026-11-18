@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cstdio>
 #include <initializer_list>
+#include <new>
 
 #include <furi.h>
 #include <furi_hal_random.h>
@@ -17,11 +18,16 @@
 
 namespace {
 
+using airrounds::flipper::Link;
 using airrounds::flipper::Request;
+using airrounds::flipper::roundSlotLabel;
 using airrounds::flipper::SessionClient;
 using airrounds::flipper::VisitLabels;
 using airrounds::flipper::visitLabels;
+using airrounds::session::Profile;
 using airrounds::session::Target;
+using airrounds::uart::RoundStatus;
+using airrounds::uart::State;
 using airrounds::uart::VisitId;
 
 enum class Screen : uint32_t { menu, status, address, channel };
@@ -34,14 +40,18 @@ struct StatusAction {
 };
 
 struct StatusView {
-    VisitLabels labels;
-    StatusAction action;
-    StatusAction drawn;
+    VisitLabels labels{"", ""};
+    RoundStatus round{};
+    State state = State::idle;
+    StatusAction action{};
+    StatusAction drawn{};
 };
 
 struct StartView {
     uint8_t channel;
+    unsigned slot;
     bool canStart;
+    bool canAdd;
 };
 
 struct App {
@@ -62,10 +72,11 @@ struct App {
     FuriStreamBuffer* rx = nullptr;
     std::atomic<bool> damaged{false};
     Screen screen = Screen::menu;
-    char address[13]{};
+    Profile draft;
+    char addresses[Profile::capacity][13]{};
     char addressDraft[13]{};
+    uint8_t channels[Profile::capacity]{1, 1, 1};
     StatusAction heldStatusAction{};
-    uint8_t channel = 1;
 };
 
 void drawStatus(Canvas* canvas, void* model) {
@@ -75,8 +86,24 @@ void drawStatus(Canvas* canvas, void* model) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 3, 12, "AirRounds status");
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 3, 29, state.labels.state);
-    canvas_draw_str(canvas, 3, 42, state.labels.detail);
+    if (state.round.profile.size() > 1) {
+        canvas_draw_str(canvas, 3, 21, state.labels.state);
+        for (size_t index = 0; index < state.round.profile.size(); ++index) {
+            const auto& point = state.round.profile[index];
+            const auto* bssid = point.bssid;
+            char address[13];
+            snprintf(address, sizeof(address), "%02x%02x%02x%02x%02x%02x",
+                     static_cast<unsigned>(bssid[0]), static_cast<unsigned>(bssid[1]),
+                     static_cast<unsigned>(bssid[2]), static_cast<unsigned>(bssid[3]),
+                     static_cast<unsigned>(bssid[4]), static_cast<unsigned>(bssid[5]));
+            const auto y = static_cast<int32_t>(30 + index * 9);
+            canvas_draw_str(canvas, 3, y, address);
+            canvas_draw_str(canvas, 73, y, roundSlotLabel(state.round, state.state, index));
+        }
+    } else {
+        canvas_draw_str(canvas, 3, 29, state.labels.state);
+        canvas_draw_str(canvas, 3, 42, state.labels.detail);
+    }
     if (state.drawn.button != StatusButton::none) {
         elements_button_center(canvas,
                                state.drawn.button == StatusButton::stop ? "Stop" : "Refresh");
@@ -87,16 +114,20 @@ void drawChannel(Canvas* canvas, void* model) {
     const auto& start = *static_cast<StartView*>(model);
     const unsigned channel = start.channel;
     char text[20];
-    snprintf(text, sizeof(text), "<  Channel %u  >", channel);
+    snprintf(text, sizeof(text), "Access point %u", start.slot);
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 3, 12, "Start visit");
+    canvas_draw_str(canvas, 3, 12, text);
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 3, 30, text);
+    snprintf(text, sizeof(text), "<  Channel %u  >", channel);
+    canvas_draw_str(canvas, 3, 28, text);
+    if (start.canAdd) {
+        canvas_draw_str(canvas, 3, 39, "Down: Add access point");
+    }
     if (start.canStart) {
         elements_button_center(canvas, "Start");
     } else {
-        canvas_draw_str(canvas, 3, 45, "Check ESP32 status");
+        canvas_draw_str(canvas, 3, 51, "Check ESP32 status");
     }
 }
 
@@ -114,19 +145,34 @@ void showStatus(App& app) {
         }
     }
     auto& model = *static_cast<StatusView*>(view_get_model(app.statusView));
+    const RoundStatus round = app.client.link() == Link::ready &&
+                                      app.client.rejected() == Request::none &&
+                                      pending != Request::start && pending != Request::stop
+                                  ? app.client.round()
+                                  : RoundStatus{};
+    const State state = app.client.state();
     const bool update =
+        model.state != state || !model.round.profile.matches(round.profile) ||
+        memcmp(model.round.results, round.results, sizeof(round.results)) != 0 ||
         model.labels.state != labels.state || model.labels.detail != labels.detail ||
         model.action.button != action.button || !model.action.visit.matches(action.visit);
     model.labels = labels;
+    model.round = round;
+    model.state = state;
     model.action = action;
     view_commit_model(app.statusView, update);
 }
 
 void showChannel(App& app) {
     auto& model = *static_cast<StartView*>(view_get_model(app.channelView));
-    const bool ready = app.client.canStart();
-    const bool update = model.channel != app.channel || model.canStart != ready;
-    model = {app.channel, ready};
+    const size_t index = app.draft.size();
+    const auto slot = static_cast<unsigned>(index + 1);
+    const uint8_t channel = app.channels[index];
+    const bool ready = app.client.canStart(slot);
+    const bool canAdd = slot < Profile::capacity && app.client.supportsRounds();
+    const bool update = model.channel != channel || model.slot != slot || model.canStart != ready ||
+                        model.canAdd != canAdd;
+    model = {channel, slot, ready, canAdd};
     view_commit_model(app.channelView, update);
 }
 
@@ -142,7 +188,7 @@ void go(App& app, Screen screen) {
         showChannel(app);
     }
     if (screen == Screen::address) {
-        memcpy(app.addressDraft, app.address, sizeof(app.address));
+        memcpy(app.addressDraft, app.addresses[app.draft.size()], sizeof(app.addressDraft));
     }
     view_dispatcher_switch_to_view(app.dispatcher, static_cast<uint32_t>(screen));
 }
@@ -167,24 +213,31 @@ bool targetFromText(const char* text, Target& target) {
     return airrounds::session::validTarget(target);
 }
 
-bool validateAddress(const char* text, FuriString* error, void*) {
+bool validateAddress(const char* text, FuriString* error, void* context) {
+    const auto& app = *static_cast<App*>(context);
     Target target{{}, 1};
-    if (targetFromText(text, target)) {
-        return true;
+    if (!targetFromText(text, target)) {
+        furi_string_set_str(error, "Enter 12 hex digits\nfor a valid BSSID");
+        return false;
     }
-    furi_string_set_str(error, "Enter 12 hex digits\nfor a valid BSSID");
-    return false;
+    auto profile = app.draft;
+    if (!profile.add(target)) {
+        furi_string_set_str(error, "BSSID already added");
+        return false;
+    }
+    return true;
 }
 
 void confirmAddress(void* context) {
     auto& app = *static_cast<App*>(context);
-    memcpy(app.address, app.addressDraft, sizeof(app.address));
+    memcpy(app.addresses[app.draft.size()], app.addressDraft, sizeof(app.addressDraft));
     go(app, Screen::channel);
 }
 
 void selectMenu(void* context, uint32_t index) {
     auto& app = *static_cast<App*>(context);
     if (index == static_cast<uint32_t>(Screen::address)) {
+        app.draft = {};
         go(app, Screen::address);
         return;
     }
@@ -222,19 +275,33 @@ bool channelInput(InputEvent* event, void* context) {
         return false;
     }
     auto& app = *static_cast<App*>(context);
+    const size_t index = app.draft.size();
+    auto& channel = app.channels[index];
     switch (event->key) {
     case InputKeyLeft:
-        app.channel = static_cast<uint8_t>(app.channel > 1 ? app.channel - 1 : 13);
+        channel = static_cast<uint8_t>(channel > 1 ? channel - 1 : 13);
         break;
     case InputKeyRight:
-        app.channel = static_cast<uint8_t>(app.channel < 13 ? app.channel + 1 : 1);
+        channel = static_cast<uint8_t>(channel < 13 ? channel + 1 : 1);
         break;
+    case InputKeyDown:
     case InputKeyOk: {
         if (event->type != InputTypeShort) {
             return true;
         }
-        Target target{{}, app.channel};
-        if (targetFromText(app.address, target) && app.client.start(target, furi_get_tick())) {
+        const bool adding = event->key == InputKeyDown;
+        if (adding && (index + 1 >= Profile::capacity || !app.client.supportsRounds())) {
+            return true;
+        }
+        auto profile = app.draft;
+        Target target{{}, channel};
+        if (!targetFromText(app.addresses[index], target) || !profile.add(target)) {
+            return true;
+        }
+        if (adding) {
+            app.draft = profile;
+            go(app, Screen::address);
+        } else if (app.client.start(profile, furi_get_tick())) {
             go(app, Screen::status);
         }
         return true;
@@ -251,7 +318,14 @@ bool navigateBack(void* context) {
     if (app.screen == Screen::menu) {
         return false;
     }
-    go(app, app.screen == Screen::channel ? Screen::address : Screen::menu);
+    if (app.screen == Screen::channel) {
+        go(app, Screen::address);
+    } else if (app.screen == Screen::address && app.draft.size() > 0) {
+        app.draft.removeLast();
+        go(app, Screen::channel);
+    } else {
+        go(app, Screen::menu);
+    }
     return true;
 }
 
@@ -295,7 +369,7 @@ void addViews(App& app) {
     app.menu = submenu_alloc();
     submenu_set_header(app.menu, "AirRounds");
     submenu_add_item(app.menu, "Status", static_cast<uint32_t>(Screen::status), selectMenu, &app);
-    submenu_add_item(app.menu, "Start visit", static_cast<uint32_t>(Screen::address), selectMenu,
+    submenu_add_item(app.menu, "Start round", static_cast<uint32_t>(Screen::address), selectMenu,
                      &app);
 
     app.addressInput = text_input_alloc();
@@ -303,12 +377,12 @@ void addViews(App& app) {
     text_input_set_result_callback(app.addressInput, confirmAddress, &app, app.addressDraft,
                                    sizeof(app.addressDraft), false);
     text_input_set_minimum_length(app.addressInput, 12);
-    text_input_set_validator(app.addressInput, validateAddress, nullptr);
+    text_input_set_validator(app.addressInput, validateAddress, &app);
 
     app.statusView = view_alloc();
     view_set_context(app.statusView, &app);
     view_allocate_model(app.statusView, ViewModelTypeLocking, sizeof(StatusView));
-    *static_cast<StatusView*>(view_get_model(app.statusView)) = {};
+    new (view_get_model(app.statusView)) StatusView{};
     view_commit_model(app.statusView, false);
     view_set_draw_callback(app.statusView, drawStatus);
     view_set_input_callback(app.statusView, statusInput);

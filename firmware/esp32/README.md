@@ -85,3 +85,12 @@ visit reports `not_observed`. A card or file error reports `storage_error`.
 
 See the [T4 checks](../../tests/README.md#one-passive-access-point) for
 the host test and the bench commands.
+
+## Control a visit over UART
+
+Build the `airrounds_uart` sketch with `make embedded`. The image is under
+`artifacts/quality/esp32/airrounds_uart/`. It listens on the Devboard's UART
+pins and writes captures to the microSD card. See the [UART protocol][uart]
+for wiring and commands.
+
+[uart]: ../../docs/uart.md

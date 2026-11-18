@@ -120,3 +120,56 @@ We sent `info` from the Mac through the Flipper USB-to-UART bridge.
 The bridge used 115200 baud, with Flipper pin 13 for TX and pin 14 for RX.
 
 [adapter-wiring]: https://github.com/justcallmekoko/ESP32Marauder/wiki/flipper-zero#sd-card-modification
+
+## UART protocol
+
+`make test` feeds UART bytes to the production protocol. It checks retries,
+a split frame, lost replies, link recovery, wrong versions, and delayed
+requests and replies. Reply tests cover cut-off replies and boot text
+before a reply. The tests also check that reception stops before storage
+starts and that the board reports a storage error.
+
+Use the [UART firmware and wiring][uart-protocol] for the hardware check.
+Keep a backup of the current flash before loading the UART image.
+
+1. Use the example `hello` to learn the boot ID, then start a visit.
+1. Resend the same start request. Check that the session ID stays the same.
+1. Stop a running visit. Check for `finalizing`, then poll until it ends.
+1. Run a visit and disconnect UART without removing board power.
+1. Reconnect. Send a fresh `hello` and a fresh `status`. Check the result.
+1. Send a start with version `02`. Check for `unsupported_version`.
+1. Send an old stop during a new visit. Check that the new visit continues.
+1. For `saved`, copy the PCAP and receipt from the card and run the Mac check.
+
+### T5a bench results
+
+On November 18, 2026, a Mac sent commands through the Flipper USB-to-UART
+bridge to an ESP32-S2 Wi-Fi Devboard with a microSD card. A temporary bench
+build used the Devboard's own USB port to switch its UART pins off and on.
+The board stayed powered during both runs.
+
+In each run, the board reported `running`. The test then disabled the UART
+pins for 5.9 s. A `status` request during the break timed out. After the pins
+came back, a fresh `hello` returned the same boot ID. A fresh `status` returned
+the result for the original session ID.
+
+| Session | Channel | Case | Recovered state and result |
+| --- | --- | --- | --- |
+| 1 | 1 | Control channel | `complete`, `not_observed` |
+| 2 | 11 | Approved access point | `complete`, `saved` |
+
+The saved row records the board's report. A separate Mac check of this run's
+PCAP and receipt is still open. The test used Flipper as a serial bridge.
+The AirRounds Flipper app is [T5b work][flipper-t5b].
+
+Before the test, we read all 4 MiB of flash and verified the backup against
+the device. After the test, we wrote back the full backup and verified the
+flash contents. The original Marauder firmware booted from `app0` and
+reported that the microSD card was connected.
+
+The local `artifacts/t5a/hardware/` folder holds the backup and its SHA-256.
+It also holds `uart-gpio-test-final.log`, `restore-gpio-bench-final.log`, and
+`restored-runtime.log`.
+
+[flipper-t5b]: ../flipper/README.md
+[uart-protocol]: ../docs/uart.md

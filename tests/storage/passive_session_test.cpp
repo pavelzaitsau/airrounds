@@ -167,6 +167,26 @@ void testQuietAndWriteFailure(const std::string& directory) {
             "a matching frame cannot turn an open failure into saved");
 }
 
+void testResetAfterSave(const std::string& directory) {
+    const auto first = directory + "/before-reset.pcap";
+    const auto second = directory + "/after-reset.pcap";
+    PassiveSession visit;
+    require(visit.start(&target, 1) == StartResult::started, "start first visit");
+    visit.receive(beacon.data(), beacon.size(), target.channel, 0);
+    require(visit.finish(first.c_str()) == VisitState::saved, "save first visit");
+
+    visit.reset();
+    require(!visit.hasSample() && visit.savedPcapSize() == 0 && visit.channel() == 0,
+            "reset the previous result and target");
+    require(visit.start(&other, 1) == StartResult::started, "start a new visit on another target");
+    visit.receive(beacon.data(), beacon.size(), other.channel, 0);
+    require(visit.finish(second.c_str()) == VisitState::not_observed, "discard the old sample");
+    require(storage::recoverPcap(first.c_str()) == storage::CaptureState::saved,
+            "keep the original capture");
+    require(storage::recoverPcap(second.c_str()) == storage::CaptureState::missing,
+            "leave the quiet visit without a capture");
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -176,6 +196,7 @@ int main(int argc, char** argv) try {
     testFilteredCapture(argv[1]);
     testCaptureAcrossBlocks(argv[1]);
     testQuietAndWriteFailure(argv[1]);
+    testResetAfterSave(argv[1]);
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

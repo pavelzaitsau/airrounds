@@ -3,14 +3,10 @@
 #include <atomic>
 
 #include "pcap_capture.h"
+#include "target.h"
 
 namespace airrounds {
 namespace session {
-
-struct Target {
-    uint8_t bssid[6];
-    uint8_t channel;
-};
 
 enum class StartResult { started, empty_list, invalid_target, busy };
 enum class VisitState { idle, observing, not_observed, saved, storage_error };
@@ -105,10 +101,7 @@ public:
         if (count == 0) {
             return StartResult::empty_list;
         }
-        constexpr uint8_t zeroAddress[6]{};
-        if (targets == nullptr || count != 1 || targets->channel == 0 || targets->channel > 13 ||
-            (targets->bssid[0] & 1U) != 0 ||
-            memcmp(targets->bssid, zeroAddress, sizeof(zeroAddress)) == 0) {
+        if (targets == nullptr || count != 1 || !validTarget(*targets)) {
             return StartResult::invalid_target;
         }
         target_ = *targets;
@@ -128,6 +121,15 @@ public:
         frameSize_ = size;
         timestampUs_ = static_cast<uint32_t>(elapsedUs);
         hasSample_.store(true, std::memory_order_release);
+    }
+
+    // Reset only after the radio detaches and any save has finished.
+    void reset() {
+        target_ = {};
+        frameSize_ = 0;
+        timestampUs_ = 0;
+        hasSample_.store(false, std::memory_order_relaxed);
+        state_ = VisitState::idle;
     }
 
     uint8_t channel() const { return target_.channel; }

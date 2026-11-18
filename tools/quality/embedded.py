@@ -12,7 +12,7 @@ from check import tool
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = Path(os.environ.get("AIRROUNDS_TOOLS", ROOT / ".airrounds-tools")).resolve()
-ESP = TOOLS / "arduino"
+ESP = (TOOLS / "arduino").resolve()
 FLIPPER = TOOLS / "flipper"
 OUTPUT = ROOT / "artifacts" / "quality"
 
@@ -54,16 +54,19 @@ def main():
                       "--error-exitcode=1", "--inline-suppr", "--suppress=missingIncludeSystem"]
     sketches = sorted({path.parent for path in (ROOT / "tests/toolchain/esp32").glob("*/*.ino")})
     if not sketches:
-        raise SystemExit("No ESP32 sketches found")
+        raise SystemExit("No ESP32 examples found")
+    sketches.append(ROOT / "firmware/esp32/airrounds_uart")
     for sketch in sketches:
         name = sketch.name
         destination = OUTPUT / "esp32" / name
         destination.mkdir(parents=True, exist_ok=True)
         fqbn = "esp32:esp32:esp32s2"
         libraries = ["--library", ROOT / "firmware/esp32/storage"]
-        if name == "airrounds_passive_smoke":
+        if name in ("airrounds_passive_smoke", "airrounds_uart"):
             fqbn += ":CDCOnBoot=cdc"
             libraries += ["--library", ROOT / "firmware/esp32/session"]
+        if name == "airrounds_uart":
+            libraries += ["--library", ROOT / "firmware/esp32/uart"]
         run([cli, "compile", "--fqbn", fqbn, *libraries,
              "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
              "--build-property", "tools.esptool_py.cmd=esptool.py",

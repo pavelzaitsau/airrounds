@@ -37,7 +37,7 @@ inline void setAddress(Target& target, uint64_t address) {
 
 class Profile {
 public:
-    enum : size_t { capacity = 3 };
+    enum : size_t { legacyCapacity = 3, capacity = 5 };
 
     size_t size() const { return size_; }
     const Target& operator[](size_t index) const { return targets_[index]; }

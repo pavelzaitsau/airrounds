@@ -32,6 +32,10 @@ public:
     }
     void beginSave(const CaptureId&) override {}
     Outcome saveResult() const override { return outcome; }
+    bool supportsJournal() const override { return journalSupported; }
+    JournalState journalState() const override { return journal; }
+    bool journalSupported = false;
+    JournalState journal = JournalState::none;
 
     unsigned starts = 0;
     unsigned stops = 0;
@@ -71,7 +75,10 @@ public:
         receive("ROM: reset" + hello);
         assert(client.link() != Link::ready);
         client.poll(now);
-        assert(outbound.find(rounds ? " round_status\n" : " status\n") != std::string::npos);
+        const char* request = visit.journalSupported && rounds ? " round_status_log\n"
+                              : rounds                         ? " round_status\n"
+                                                               : " status\n";
+        assert(outbound.find(request) != std::string::npos);
         receive(deliver());
         assert(client.link() == Link::ready);
     }
@@ -443,6 +450,33 @@ void oldFirmwareKeepsSingleVisit() {
     link.receive(link.deliver());
     assert(link.client.state() == State::running);
 }
+void journalFailureKeepsTheCaptureResult() {
+    Loopback link;
+    link.visit.journalSupported = true;
+    link.handshake();
+    const bool started = link.client.start(target, link.now);
+    assert(started);
+    link.receive(link.deliver());
+    link.visit.done = true;
+    link.visit.outcome = Outcome::saved;
+    link.visit.journal = JournalState::failed;
+    link.board.poll();
+    link.now += 500;
+    link.client.poll(link.now);
+    const auto status = link.deliver();
+    assert(status.find(" journal failed aps ") != std::string::npos);
+    link.receive(status);
+    assert(link.client.state() == State::complete && link.client.outcome() == Outcome::saved);
+    assert(link.client.journalState() == JournalState::failed);
+
+    link.outbound = "@01 123456789abcdef0 80000000000001aa 00000000 round_status\n";
+    const auto legacy = link.deliver();
+    assert(legacy.find(" journal ") == std::string::npos);
+    Reply parsed;
+    const bool decoded = readReply(legacy.c_str(), parsed);
+    assert(decoded && parsed.outcome == Outcome::saved && !parsed.hasJournal);
+}
+
 } // namespace
 
 int main() try {
@@ -460,6 +494,7 @@ int main() try {
     nextRoundCanUseAnotherProfile();
     singlePointKeepsItsAddressAfterReopenAndStop();
     oldFirmwareKeepsSingleVisit();
+    journalFailureKeepsTheCaptureResult();
     std::cout << "Flipper client checks passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -7,7 +7,7 @@
 namespace airrounds {
 namespace uart {
 
-constexpr size_t frameCapacity = 100;
+constexpr size_t frameCapacity = 144;
 constexpr uint64_t readRequestBit = uint64_t{1} << 63U;
 
 struct TimedByte {

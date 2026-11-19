@@ -37,7 +37,7 @@ each ESP32 image and runs Cppcheck with the target SDK settings.
 | --- | --- |
 | `make format-check` | Formatting of project `.c`, `.cpp`, `.h`, and `.ino` files |
 | `make format` | Applies `.clang-format` to those files |
-| `make test` | C++11 storage, UART, and Flipper client tests, plus Mac PCAP checks |
+| `make test` | C++11 storage and UART tests, Mac PCAP checks, and the native Flipper UI emulator |
 | `make asan` | The C++ host tests with AddressSanitizer and UndefinedBehaviorSanitizer |
 | `make tsan` | The C++ host tests with ThreadSanitizer, in separate executables |
 | `make tidy` | Clang-Tidy and its Clang Analyzer checks on the host test translation units |

@@ -60,6 +60,8 @@ public:
         return probe(to) == FilePresence::missing && ::rename(from, to) == 0;
     }
 
+    static void remove(const char* path) { ::unlink(path); }
+
     explicit operator bool() const { return descriptor_ >= 0; }
     int lastError() const { return lastError_; }
 

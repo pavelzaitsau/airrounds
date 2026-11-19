@@ -153,6 +153,7 @@ struct FaultFile : SdFile {
     enum Fault {
         none,
         zero_write,
+        short_seal,
         sync_data,
         close_data,
         reread,
@@ -188,7 +189,11 @@ struct FaultFile : SdFile {
     // cppcheck-suppress duplInheritedMember
     // NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method)
     size_t write(const uint8_t* bytes, size_t count) {
-        return fault == zero_write && writingData ? 0 : SdFile::write(bytes, count);
+        if (fault == zero_write && writingData) {
+            return 0;
+        }
+        return SdFile::write(bytes, fault == short_seal && writingSeal ? std::min(count, size_t{3})
+                                                                       : count);
     }
 
     // Fault injection uses static template dispatch, not virtual calls.
@@ -231,6 +236,17 @@ struct FaultFile : SdFile {
 };
 
 FaultFile::Fault FaultFile::fault = FaultFile::none;
+
+void testShortSealWrite(const std::string& directory) {
+    const auto path = directory + "/short-seal.pcap";
+    PcapCapture<1, 64, FaultFile> capture(path.c_str());
+    require(capture.open(), "create short receipt write case");
+    enqueue(capture, sample);
+    FaultFile::fault = FaultFile::short_seal;
+    require(capture.finish() == CaptureState::saved, "retry the unwritten receipt bytes");
+    FaultFile::fault = FaultFile::none;
+    require(recoverPcap(path.c_str()) == CaptureState::saved, "read the complete receipt");
+}
 
 void testFinalizationErrors(const std::string& directory) {
     for (const auto fault :
@@ -318,8 +334,9 @@ int main(int argc, char** argv) {
     testInvalidPcapAndOverflow(argv[1]);
     testInterruptedProcess(argv[1]);
     testDamageAfterSave(argv[1]);
+    testShortSealWrite(argv[1]);
     testFinalizationErrors(argv[1]);
     testClassicFormats(argv[1]);
     testSealRecovery(argv[1]);
-    std::cout << "PCAP capture: 7 groups passed\n";
+    std::cout << "PCAP capture: 8 groups passed\n";
 }

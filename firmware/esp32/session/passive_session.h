@@ -11,6 +11,11 @@ namespace session {
 enum class StartResult { started, empty_list, invalid_target, busy };
 enum class VisitState { idle, observing, not_observed, saved, storage_error };
 
+struct CaptureStatistics {
+    uint64_t bytesWritten;
+    uint32_t queueOverflows;
+};
+
 struct BeaconView {
     const uint8_t* bssid = nullptr;
     const uint8_t* ssid = nullptr;
@@ -20,31 +25,31 @@ struct BeaconView {
 constexpr size_t maxBeaconSize = 2304;
 
 inline bool parseBeacon(uint8_t channel, const uint8_t* frame, size_t size, BeaconView& beacon) {
-    constexpr size_t fixedBeaconSize = 36;
+    constexpr size_t ssidIdOffset = 36;
+    constexpr size_t ssidValueOffset = ssidIdOffset + 2;
     constexpr uint8_t broadcast[6]{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    if (frame == nullptr || size < fixedBeaconSize || size > maxBeaconSize || frame[0] != 0x80 ||
+    if (frame == nullptr || size < ssidValueOffset || size > maxBeaconSize || frame[0] != 0x80 ||
         (frame[1] & 0xc7U) != 0 || (frame[22] & 0x0fU) != 0 ||
         memcmp(frame + 4, broadcast, sizeof(broadcast)) != 0 || (frame[16] & 1U) != 0 ||
         memcmp(frame + 10, frame + 16, 6) != 0) {
         return false;
     }
 
-    BeaconView found;
-    for (size_t offset = fixedBeaconSize; offset < size;) {
+    // A complete 2.4 GHz beacon starts its tagged elements with SSID and Supported Rates.
+    const size_t ssidSize = frame[ssidIdOffset + 1];
+    const size_t ratesOffset = ssidValueOffset + ssidSize;
+    if (frame[ssidIdOffset] != 0 || ssidSize > 32 || size < ratesOffset + 2 ||
+        frame[ratesOffset] != 1 || frame[ratesOffset + 1] == 0 || frame[ratesOffset + 1] > 8) {
+        return false;
+    }
+    for (size_t offset = ratesOffset; offset < size;) {
         if (size - offset < 2) {
             return false;
         }
         const uint8_t id = frame[offset++];
         const size_t length = frame[offset++];
-        if (length > size - offset) {
+        if (length > size - offset || id == 0) {
             return false;
-        }
-        if (id == 0) {
-            if (found.ssid != nullptr || length > 32) {
-                return false;
-            }
-            found.ssid = frame + offset;
-            found.ssidSize = length;
         }
         if ((id == 3 && length != 1) || (id == 61 && length != 22) ||
             ((id == 3 || id == 61) && frame[offset] != channel)) {
@@ -53,11 +58,12 @@ inline bool parseBeacon(uint8_t channel, const uint8_t* frame, size_t size, Beac
         offset += length;
     }
     const uint8_t zeroAddress[6]{};
-    if (found.ssid == nullptr || memcmp(frame + 16, zeroAddress, sizeof(zeroAddress)) == 0) {
+    if (memcmp(frame + 16, zeroAddress, sizeof(zeroAddress)) == 0) {
         return false;
     }
-    found.bssid = frame + 16;
-    beacon = found;
+    beacon.bssid = frame + 16;
+    beacon.ssid = frame + ssidValueOffset;
+    beacon.ssidSize = ssidSize;
     return true;
 }
 
@@ -130,13 +136,13 @@ public:
     }
 
     // Serialize receive and observationDone. Stop delivery before calling finish.
-    void receive(const uint8_t* frame, size_t size, uint8_t receivedChannel, uint64_t elapsedUs) {
+    bool receive(const uint8_t* frame, size_t size, uint8_t receivedChannel, uint64_t elapsedUs) {
         BeaconView beacon;
         if (state_ != VisitState::observing || observationDone(elapsedUs) ||
             receivedChannel != target_.channel || frame == nullptr || size < 22 ||
             memcmp(frame + 16, target_.bssid, sizeof(target_.bssid)) != 0 ||
             !parseBeacon(receivedChannel, frame, size, beacon)) {
-            return;
+            return false;
         }
         if (adaptive_) {
             noteObservation(frame + 32, beacon, static_cast<uint32_t>(elapsedUs));
@@ -147,6 +153,7 @@ public:
             timestampUs_ = static_cast<uint32_t>(elapsedUs);
             hasSample_.store(true, std::memory_order_release);
         }
+        return true;
     }
 
     // Reset only after the radio detaches and any save has finished.
@@ -157,6 +164,7 @@ public:
         adaptive_ = false;
         deadlineUs_ = windowUs;
         observationCount_ = 0;
+        captureStatistics_ = {};
         hasSample_.store(false, std::memory_order_relaxed);
         state_ = VisitState::idle;
     }
@@ -171,6 +179,8 @@ public:
         }
         return state_;
     }
+
+    const CaptureStatistics& captureStatistics() const { return captureStatistics_; }
 
     size_t savedPcapSize() const {
         return state_ == VisitState::saved ? pcapHeaderSize + recordHeaderSize + frameSize_ : 0;
@@ -216,14 +226,19 @@ private:
         }
     }
 
-    VisitState save(const char* path) const {
-        constexpr size_t blockSize = 256;
+    static constexpr size_t blockSize = 256;
+    using Capture = storage::PcapCapture<1, blockSize>;
+
+    VisitState save(const char* path) {
+        Capture capture(path);
+        const bool saved = capture.open() && writePcap(capture) &&
+                           capture.finish() == storage::CaptureState::saved;
+        captureStatistics_ = {capture.bytesAccepted(), capture.overflowCount()};
+        return saved ? VisitState::saved : VisitState::storage_error;
+    }
+
+    bool writePcap(Capture& capture) const {
         using storage::EnqueueStatus;
-        using storage::WriteStatus;
-        storage::PcapCapture<1, blockSize> capture(path);
-        if (!capture.open()) {
-            return VisitState::storage_error;
-        }
 
         // Classic PCAP 2.4 with one raw IEEE 802.11 record and microsecond timestamps.
         uint8_t header[pcapHeaderSize + recordHeaderSize]{0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4};
@@ -237,22 +252,21 @@ private:
 
         if (capture.enqueue(header, sizeof(header)) != EnqueueStatus::queued ||
             !drainBlock(capture)) {
-            return VisitState::storage_error;
+            return false;
         }
         for (size_t offset = 0; offset < frameSize_;) {
             const size_t remaining = frameSize_ - offset;
             const size_t count = remaining < blockSize ? remaining : blockSize;
             if (capture.enqueue(frame_ + offset, count) != EnqueueStatus::queued ||
                 !drainBlock(capture)) {
-                return VisitState::storage_error;
+                return false;
             }
             offset += count;
         }
-        return capture.finish() == storage::CaptureState::saved ? VisitState::saved
-                                                                : VisitState::storage_error;
+        return true;
     }
 
-    template <typename Capture> static bool drainBlock(Capture& capture) {
+    static bool drainBlock(Capture& capture) {
         auto result = capture.drainOne();
         while (result == storage::WriteStatus::partial) {
             result = capture.drainOne();
@@ -268,6 +282,7 @@ private:
     bool adaptive_ = false;
     Target target_{};
     VisitState state_ = VisitState::idle;
+    CaptureStatistics captureStatistics_{};
     std::atomic<bool> hasSample_{false};
     uint8_t frame_[maxFrameSize]{};
     size_t frameSize_ = 0;

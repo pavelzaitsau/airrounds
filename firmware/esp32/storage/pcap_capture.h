@@ -89,11 +89,7 @@ template <typename File> bool publishSeal(const std::string& path, const Seal& p
     memcpy(record, sealMagic, sizeof(sealMagic));
     writeLittle(record + sizeOffset, proof.size);
     writeLittle(record + crcOffset, proof.crc);
-    size_t accepted = 0;
-    const bool written =
-        writePending(seal, record, sizeof(record), accepted) == WriteStatus::complete &&
-        seal.lastError() == 0;
-    const bool synced = written && seal.sync();
+    const bool synced = writeAll(seal, record, sizeof(record)) && seal.sync();
     const bool closed = seal.close();
     Seal confirmed{};
     return synced && closed && readSeal<File>(stagePath, confirmed) &&
@@ -155,6 +151,8 @@ public:
     WriteStatus drainOne() { return active_ ? queue_.drainOne() : WriteStatus::unavailable; }
 
     uint32_t overflowCount() const { return queue_.overflowCount(); }
+
+    uint64_t bytesAccepted() const { return queue_.bytesAccepted(); }
 
     CaptureState finish() {
         if (!active_) {

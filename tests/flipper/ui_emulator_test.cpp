@@ -28,6 +28,9 @@ public:
     uint64_t nowUs() const override { return static_cast<uint64_t>(emu::clockMs) * 1000U; }
     VisitStart start(const airrounds::session::Target&, const VisitBudget&) override {
         ++visits;
+        if (visits == deadlineOnVisit) {
+            return VisitStart::deadline;
+        }
         observed = false;
         outcome = Outcome::none;
         return VisitStart::listening;
@@ -36,15 +39,51 @@ public:
     bool stopReception() override { return true; }
     void beginSave(const CaptureId&) override {}
     Outcome saveResult() const override { return outcome; }
+    bool supportsJournal() const override { return journalSupported; }
+    JournalState journalState() const override { return journal; }
 
+    bool journalSupported = false;
+    JournalState journal = JournalState::none;
     unsigned visits = 0;
+    unsigned deadlineOnVisit = 0;
     bool observed = false;
     Outcome outcome = Outcome::none;
 };
 
+class Scanner final : public ScanBackend {
+public:
+    Scanner() {
+        const char* names[]{"TELEPORT", "Studio", "Guest", "Loft", "Atlas", "Workshop"};
+        for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); ++index) {
+            const airrounds::session::Target target{
+                {2, 0, 0, 0, 0, static_cast<uint8_t>(index + 1)}, 11};
+            assert(list_.add(target, reinterpret_cast<const uint8_t*>(names[index]),
+                             strlen(names[index])));
+        }
+    }
+
+    void startScan() override { state_ = ScanState::running; }
+    void pollScan() override {
+        if (state_ == ScanState::running && completes) {
+            state_ = ScanState::complete;
+        }
+    }
+    void stopScan() override { state_ = cleanupFails ? ScanState::error : ScanState::idle; }
+    ScanState scanState() const override { return state_; }
+    const ScanList& scanList() const override { return list_; }
+
+    bool completes = true;
+    bool cleanupFails = false;
+
+private:
+    ScanList list_;
+    ScanState state_ = ScanState::idle;
+};
+
 class Board {
 public:
-    Board(bool legacy = false) : legacy_(legacy) {
+    Board(bool legacy = false, bool scan = false)
+        : protocol_(receiver, 0x123456789abcdef0ULL, scan ? &scanner : nullptr), legacy_(legacy) {
         emu::transmit = [this](const uint8_t* data, size_t size) {
             if (online) {
                 send(data, size);
@@ -92,6 +131,7 @@ public:
     }
 
     Receiver receiver;
+    Scanner scanner;
     bool online = true;
 
 private:
@@ -108,7 +148,7 @@ private:
         }
     }
 
-    Protocol protocol_{receiver, 0x123456789abcdef0ULL};
+    Protocol protocol_;
     std::string inbound_;
     bool legacy_;
 };
@@ -223,6 +263,7 @@ void nativeFlow(Board& board) {
     expect("Stopping...");
     board.disconnect(); // The board received Stop. Flipper did not receive its reply.
     board.receiver.outcome = Outcome::saved;
+    board.receiver.journal = JournalState::failed;
     board.advance(22);
     expect("Link lost");
     expect("Session may run");
@@ -235,15 +276,153 @@ void nativeFlow(Board& board) {
     expect("Command unconfirmed");
     board.advance(10);
     expect("Session stopped");
-    expect("1 of 3 saved");
+    expect("1 of 3 captured");
+    expect("Session log failed");
     tap(InputKeyOk);
     expect("Results");
-    expect("Saved");
+    expect("Captured");
     expect("Stopped");
     tap(InputKeyOk);
     tap(InputKeyRight);
     expect("Board SD file");
     expect("00000001-1.pcap");
+}
+
+void scannedFlow() {
+    Board board(false, true);
+    emu::scenario = [&] {
+        board.advance(8);
+        expect("Scan area");
+        expect("Flash board hardware");
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        expect("Flash board hardware");
+        assert(!shows("Scan area"));
+        tap(InputKeyBack);
+        tap(InputKeyUp);
+        tap(InputKeyOk);
+        expect("Scanning...");
+        tap(InputKeyBack); // Request cancel before the start reply arrives.
+        board.advance(20);
+        expect("Scan area");
+        tap(InputKeyOk);
+        board.advance(60);
+        expect("Beacons");
+        tap(InputKeyOk);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        expect("Start (2)");
+        tap(InputKeyRight);
+        board.advance(10);
+        expect("Listening");
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::saved;
+        board.advance(12);
+        expect("Captured 1/2");
+        board.receiver.outcome = Outcome::not_observed;
+        tap(InputKeyOk);
+        board.advance(15);
+        expect("Beacons");
+        expect("Saved");
+        expect("Start (1)");
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        tap(InputKeyRight);
+        board.advance(10);
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::not_observed;
+        board.advance(12);
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::saved;
+        board.advance(15);
+        expect("Beacons");
+        expect("Not seen");
+        expect("Saved");
+        assert(!shows("Ch 11") && !shows("02:00:00:00:00:01"));
+        tap(InputKeyLeft);
+        board.advance(60);
+        expect("Not seen");
+        expect("Saved");
+        tap(InputKeyOk);
+        expect("Start (1)");
+        tap(InputKeyRight);
+        board.advance(10);
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::saved;
+        board.advance(15);
+        expect("Beacons");
+        assert(!shows("Not seen"));
+        assert(board.receiver.visits == 5);
+    };
+    assert(airrounds_app(nullptr) == 0);
+}
+
+void deadlineKeepsCompletedMiss() {
+    Board board(false, true);
+    board.receiver.deadlineOnVisit = 3;
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyOk);
+        board.advance(60);
+        for (unsigned row = 0; row < 3; ++row) {
+            tap(InputKeyOk);
+            if (row < 2) {
+                tap(InputKeyDown);
+            }
+        }
+        tap(InputKeyRight);
+        board.advance(10);
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::saved;
+        board.advance(12);
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::not_observed;
+        board.advance(15);
+        expect("Beacons");
+        expect("Not seen");
+        expect("Start (1)");
+    };
+    assert(airrounds_app(nullptr) == 0);
+}
+
+void scanCancelShowsCleanupError() {
+    Board board(false, true);
+    board.scanner.completes = false;
+    board.scanner.cleanupFails = true;
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyOk);
+        board.advance(8);
+        expect("Scanning...");
+        tap(InputKeyBack);
+        board.advance(15);
+        expect("Cancel failed");
+        expect("Check Devboard");
+        tap(InputKeyBack);
+        expect("Scan area");
+    };
+    assert(airrounds_app(nullptr) == 0);
+}
+
+void fivePointSelection() {
+    Board board(false, true);
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyOk);
+        board.advance(60);
+        for (unsigned row = 0; row < 5; ++row) {
+            tap(InputKeyOk);
+            tap(InputKeyDown);
+        }
+        tap(InputKeyOk);
+        expect("Start (5)");
+        assert(board.receiver.visits == 0);
+        tap(InputKeyRight);
+        board.advance(10);
+        expect("Captured 0/5");
+        assert(board.receiver.visits == 1);
+    };
+    assert(airrounds_app(nullptr) == 0);
 }
 
 void saveAfterCardReturns() {
@@ -316,6 +495,7 @@ void rejectedLegacyStartDoesNotNameAnotherPoint() {
 int main() {
     {
         Board board;
+        board.receiver.journalSupported = true;
         emu::scenario = [&] { nativeFlow(board); };
         assert(airrounds_app(nullptr) == 0);
         assert(emu::expansion.enabled);
@@ -330,7 +510,7 @@ int main() {
             expect("Checking status");
             board.advance(8);
             expect("Session ended");
-            expect("0 of 1 saved");
+            expect("0 of 1 captured");
             tap(InputKeyBack);
             expect("Board status");
             tap(InputKeyOk);
@@ -339,13 +519,18 @@ int main() {
             tap(InputKeyUp);
             tap(InputKeyOk);
             expect("Session ended");
-            expect("0 of 1 saved");
+            expect("0 of 1 captured");
         };
         assert(airrounds_app(nullptr) == 0);
     }
+    scannedFlow();
+    deadlineKeepsCompletedMiss();
+    scanCancelShowsCleanupError();
+    fivePointSelection();
     saveAfterCardReturns();
     staleProfileIsNotOverwritten();
     rejectedLegacyStartDoesNotNameAnotherPoint();
-    std::cout << "Native UI emulator: profile reopen, legacy firmware, Stop, link loss, and "
-                 "results passed\n";
+    std::cout << "Native UI emulator: scan cancellation and cleanup errors, five-point limit, "
+                 "Stop, deadline, missed point retry, "
+                 "legacy profiles, link recovery, and journal failure passed\n";
 }

@@ -22,6 +22,7 @@ inline HomeEntry homeEntry(Request pending, uart::State state, size_t count, boo
 }
 
 struct RunReport {
+    uart::JournalState journal = uart::JournalState::none;
     uart::VisitId id{};
     uart::State state = uart::State::idle;
     uart::Outcome outcome = uart::Outcome::none;
@@ -56,7 +57,7 @@ inline const char* outcomeTitle(const RunReport& report) {
 inline const char* pointResult(uart::Outcome outcome, uart::State state) {
     switch (outcome) {
     case uart::Outcome::saved:
-        return "Saved";
+        return "Captured";
     case uart::Outcome::not_observed:
         return "Not seen";
     case uart::Outcome::radio_error:
@@ -72,7 +73,7 @@ inline const char* pointResult(uart::Outcome outcome, uart::State state) {
 inline const char* pointDetail(uart::Outcome outcome, uart::State state) {
     switch (outcome) {
     case uart::Outcome::saved:
-        return "Saved to board SD";
+        return "Captured to board SD";
     case uart::Outcome::not_observed:
         return "Point not seen";
     case uart::Outcome::storage_error:

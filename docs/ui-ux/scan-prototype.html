@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirRounds Scan and Capture</title>
+<style>
+html { color-scheme: light dark; background: light-dark(#f4f1e8, #191a19); }
+body { margin: 0; padding: clamp(14px, 4vw, 34px); }
+</style>
+</head>
+<body>
+<section id="airrounds-flipper" aria-label="AirRounds на Flipper Zero">
+  <div class="ar-device">
+    <div class="ar-bezel">
+      <canvas width="128" height="64" role="img" aria-label="Экран Flipper 128 на 64"></canvas>
+      <div class="ar-screen-buttons" aria-label="Действия на экране"></div>
+    </div>
+    <div class="ar-controls" aria-label="Кнопки Flipper" role="group">
+      <div class="ar-dpad">
+        <button type="button" class="ar-up" data-key="up" aria-label="Вверх">▲</button>
+        <button type="button" class="ar-left" data-key="left" aria-label="Влево">◀</button>
+        <button type="button" class="ar-ok" data-key="ok" aria-label="OK">OK</button>
+        <button type="button" class="ar-right" data-key="right" aria-label="Вправо">▶</button>
+        <button type="button" class="ar-down" data-key="down" aria-label="Вниз">▼</button>
+      </div>
+      <button type="button" class="ar-back" data-key="back">Back</button>
+    </div>
+  </div>
+  <div class="ar-guide">
+    <h2>AirRounds</h2>
+    <p>Выбери TELEPORT и Studio. Остановись после первого захвата, добавь Guest и продолжи.</p>
+    <p>Нажимай на экран, кнопки под ним или используй стрелки, Enter и Esc.</p>
+    <div class="ar-simulation" hidden aria-label="События симуляции">
+      <button type="button" data-key="advance">Захватить точку</button>
+      <button type="button" data-key="miss">Сымитировать «не найдена»</button>
+    </div>
+    <p class="ar-demo">Симуляция на демонстрационных данных.</p>
+  </div>
+  <p class="ar-sr" role="status" aria-live="polite" aria-atomic="true"></p>
+</section>
+<style>
+#airrounds-flipper {
+  --ar-ink: light-dark(#202221, #f0eeea);
+  --ar-muted: light-dark(#5d625f, #b9bcb8);
+  --ar-border: light-dark(#bbbdb6, #666965);
+  display: grid;
+  grid-template-columns: minmax(0, 440px) minmax(180px, 235px);
+  gap: clamp(16px, 4vw, 36px);
+  align-items: start;
+  max-width: 720px;
+  margin: auto;
+  color: var(--ar-ink);
+  font: 15px/1.45 system-ui, sans-serif;
+}
+#airrounds-flipper * { box-sizing: border-box; }
+#airrounds-flipper [hidden] { display: none; }
+#airrounds-flipper .ar-device {
+  min-width: 0;
+  padding: clamp(12px, 4vw, 20px);
+  border-radius: 26px;
+  border: 1px solid #282a28;
+  background: #353936;
+  box-shadow: inset 0 1px #555954, 0 4px 0 #242724;
+}
+#airrounds-flipper .ar-bezel {
+  position: relative;
+  border-radius: 12px;
+  border: 8px solid #202320;
+  background: #202320;
+  overflow: hidden;
+}
+#airrounds-flipper canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2;
+  image-rendering: pixelated;
+  background: #f6bd62;
+}
+#airrounds-flipper .ar-screen-buttons {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#airrounds-flipper button { font: inherit; cursor: pointer; touch-action: manipulation; }
+#airrounds-flipper button:focus-visible { outline: 2px solid #ed9534; outline-offset: 2px; }
+#airrounds-flipper .ar-screen-buttons button {
+  position: absolute;
+  pointer-events: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+}
+#airrounds-flipper .ar-screen-buttons button:focus-visible { outline: 2px dashed #412500; outline-offset: -3px; }
+#airrounds-flipper .ar-screen-buttons button:disabled { pointer-events: none; }
+#airrounds-flipper .ar-controls {
+  min-height: 132px;
+  margin: 18px auto 0;
+  position: relative;
+  display: grid;
+  align-items: center;
+  max-width: 310px;
+}
+#airrounds-flipper .ar-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  grid-template-rows: repeat(3, 44px);
+  gap: 3px;
+  justify-content: center;
+}
+#airrounds-flipper .ar-controls button {
+  min-height: 44px;
+  color: #f7f2e9;
+  background: #50564f;
+  border: 1px solid #6a7068;
+  box-shadow: 0 2px #252824;
+  border-radius: 10px;
+}
+#airrounds-flipper .ar-controls button:hover { background: #61675f; }
+#airrounds-flipper .ar-controls button:active { transform: translateY(1px); box-shadow: 0 1px #252824; }
+#airrounds-flipper .ar-up { grid-area: 1 / 2; }
+#airrounds-flipper .ar-left { grid-area: 2 / 1; }
+#airrounds-flipper .ar-ok { grid-area: 2 / 2; }
+#airrounds-flipper .ar-right { grid-area: 2 / 3; }
+#airrounds-flipper .ar-down { grid-area: 3 / 2; }
+#airrounds-flipper .ar-controls .ar-ok { background: #f6bd62; color: #302311; border-color: #ffce82; font-weight: 700; }
+#airrounds-flipper .ar-back { position: absolute; right: 0; top: 47px; padding: 0 8px; }
+#airrounds-flipper .ar-guide { display: grid; gap: 12px; padding-top: 8px; }
+#airrounds-flipper h2 { margin: 0; font: 650 23px/1.15 system-ui, sans-serif; letter-spacing: -.025em; }
+#airrounds-flipper p { margin: 0; }
+#airrounds-flipper .ar-demo { color: var(--ar-muted); font-size: 13px; }
+#airrounds-flipper .ar-simulation { display: grid; gap: 6px; }
+#airrounds-flipper .ar-simulation[hidden] { display: none; }
+#airrounds-flipper .ar-simulation button {
+  min-height: 44px;
+  padding: 6px 10px;
+  justify-self: start;
+  color: var(--ar-ink);
+  border: 1px solid var(--ar-border);
+  background: transparent;
+  border-radius: 8px;
+}
+#airrounds-flipper .ar-simulation button:disabled { opacity: .55; cursor: default; }
+#airrounds-flipper .ar-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 575px) {
+  #airrounds-flipper { grid-template-columns: minmax(0, 440px); justify-content: center; gap: 16px; }
+  #airrounds-flipper .ar-guide { padding-top: 0; }
+}
+</style>
+<script>
+(() => {
+  "use strict";
+// ASCII glyphs from the Adafruit GFX classic bitmap font, with empty edge columns trimmed.
+// https://github.com/adafruit/Adafruit-GFX-Library/blob/master/glcdfont.c
+/*
+Software License Agreement (BSD License)
+
+Copyright (c) 2012 Adafruit Industries.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+*/
+
+const lcdGlyphs = [
+    [0x00, 0x00],
+    [0x5f, 0x00],
+    [0x07, 0x00, 0x07],
+    [0x14, 0x7f, 0x14, 0x7f, 0x14],
+    [0x24, 0x2a, 0x7f, 0x2a, 0x12],
+    [0x23, 0x13, 0x08, 0x64, 0x62],
+    [0x36, 0x49, 0x56, 0x20, 0x50],
+    [0x08, 0x07, 0x03],
+    [0x1c, 0x22, 0x41],
+    [0x41, 0x22, 0x1c],
+    [0x2a, 0x1c, 0x7f, 0x1c, 0x2a],
+    [0x08, 0x08, 0x3e, 0x08, 0x08],
+    [0x80, 0x70, 0x30],
+    [0x08, 0x08, 0x08, 0x08, 0x08],
+    [0x60, 0x60],
+    [0x20, 0x10, 0x08, 0x04, 0x02],
+    [0x3e, 0x51, 0x49, 0x45, 0x3e],
+    [0x42, 0x7f, 0x40],
+    [0x72, 0x49, 0x49, 0x49, 0x46],
+    [0x21, 0x41, 0x49, 0x4d, 0x33],
+    [0x18, 0x14, 0x12, 0x7f, 0x10],
+    [0x27, 0x45, 0x45, 0x45, 0x39],
+    [0x3c, 0x4a, 0x49, 0x49, 0x31],
+    [0x41, 0x21, 0x11, 0x09, 0x07],
+    [0x36, 0x49, 0x49, 0x49, 0x36],
+    [0x46, 0x49, 0x49, 0x29, 0x1e],
+    [0x14, 0x00],
+    [0x40, 0x34],
+    [0x08, 0x14, 0x22, 0x41],
+    [0x14, 0x14, 0x14, 0x14, 0x14],
+    [0x41, 0x22, 0x14, 0x08],
+    [0x02, 0x01, 0x59, 0x09, 0x06],
+    [0x3e, 0x41, 0x5d, 0x59, 0x4e],
+    [0x7c, 0x12, 0x11, 0x12, 0x7c],
+    [0x7f, 0x49, 0x49, 0x49, 0x36],
+    [0x3e, 0x41, 0x41, 0x41, 0x22],
+    [0x7f, 0x41, 0x41, 0x41, 0x3e],
+    [0x7f, 0x49, 0x49, 0x49, 0x41],
+    [0x7f, 0x09, 0x09, 0x09, 0x01],
+    [0x3e, 0x41, 0x41, 0x51, 0x73],
+    [0x7f, 0x08, 0x08, 0x08, 0x7f],
+    [0x41, 0x7f, 0x41],
+    [0x20, 0x40, 0x41, 0x3f, 0x01],
+    [0x7f, 0x08, 0x14, 0x22, 0x41],
+    [0x7f, 0x40, 0x40, 0x40, 0x40],
+    [0x7f, 0x02, 0x1c, 0x02, 0x7f],
+    [0x7f, 0x04, 0x08, 0x10, 0x7f],
+    [0x3e, 0x41, 0x41, 0x41, 0x3e],
+    [0x7f, 0x09, 0x09, 0x09, 0x06],
+    [0x3e, 0x41, 0x51, 0x21, 0x5e],
+    [0x7f, 0x09, 0x19, 0x29, 0x46],
+    [0x26, 0x49, 0x49, 0x49, 0x32],
+    [0x03, 0x01, 0x7f, 0x01, 0x03],
+    [0x3f, 0x40, 0x40, 0x40, 0x3f],
+    [0x1f, 0x20, 0x40, 0x20, 0x1f],
+    [0x3f, 0x40, 0x38, 0x40, 0x3f],
+    [0x63, 0x14, 0x08, 0x14, 0x63],
+    [0x03, 0x04, 0x78, 0x04, 0x03],
+    [0x61, 0x59, 0x49, 0x4d, 0x43],
+    [0x7f, 0x41, 0x41, 0x41],
+    [0x02, 0x04, 0x08, 0x10, 0x20],
+    [0x41, 0x41, 0x41, 0x7f],
+    [0x04, 0x02, 0x01, 0x02, 0x04],
+    [0x40, 0x40, 0x40, 0x40, 0x40],
+    [0x03, 0x07, 0x08],
+    [0x20, 0x54, 0x54, 0x78, 0x40],
+    [0x7f, 0x28, 0x44, 0x44, 0x38],
+    [0x38, 0x44, 0x44, 0x44, 0x28],
+    [0x38, 0x44, 0x44, 0x28, 0x7f],
+    [0x38, 0x54, 0x54, 0x54, 0x18],
+    [0x08, 0x7e, 0x09, 0x02],
+    [0x18, 0xa4, 0xa4, 0x9c, 0x78],
+    [0x7f, 0x08, 0x04, 0x04, 0x78],
+    [0x44, 0x7d, 0x40],
+    [0x20, 0x40, 0x40, 0x3d],
+    [0x7f, 0x10, 0x28, 0x44],
+    [0x41, 0x7f, 0x40],
+    [0x7c, 0x04, 0x78, 0x04, 0x78],
+    [0x7c, 0x08, 0x04, 0x04, 0x78],
+    [0x38, 0x44, 0x44, 0x44, 0x38],
+    [0xfc, 0x18, 0x24, 0x24, 0x18],
+    [0x18, 0x24, 0x24, 0x18, 0xfc],
+    [0x7c, 0x08, 0x04, 0x04, 0x08],
+    [0x48, 0x54, 0x54, 0x54, 0x24],
+    [0x04, 0x04, 0x3f, 0x44, 0x24],
+    [0x3c, 0x40, 0x40, 0x20, 0x7c],
+    [0x1c, 0x20, 0x40, 0x20, 0x1c],
+    [0x3c, 0x40, 0x30, 0x40, 0x3c],
+    [0x44, 0x28, 0x10, 0x28, 0x44],
+    [0x4c, 0x90, 0x90, 0x90, 0x7c],
+    [0x44, 0x64, 0x54, 0x4c, 0x44],
+    [0x08, 0x36, 0x41],
+    [0x77, 0x00],
+    [0x41, 0x36, 0x08],
+    [0x02, 0x01, 0x02, 0x04, 0x02],
+];
+
+  const root = document.getElementById("airrounds-flipper");
+  const lcd = root.querySelector("canvas");
+  const ctx = lcd.getContext("2d");
+  const buttons = root.querySelector(".ar-screen-buttons");
+  const status = root.querySelector(".ar-sr");
+  const simulation = root.querySelector(".ar-simulation");
+  const padOk = root.querySelector(".ar-ok");
+  const networks = ["TELEPORT", "Studio", "Guest", "Workshop", "Loft", "Atlas"];
+  const menu = ["Scan area", "Flash board hardware", "Test board", "About"];
+  const maxSelection = 5;
+  const visibleRows = 3;
+  const paper = "#f6bd62";
+  const ink = "#2d210e";
+
+  const selected = new Set();
+  const saved = new Set();
+  const missed = new Set();
+  let view = "home";
+  let menuCursor = 0;
+  let cursor = 0;
+  let offset = 0;
+  let scanReturn = "home";
+  let timer;
+  let round;
+  let limitHint = false;
+
+  function after(delay, action) {
+    clearTimeout(timer);
+    timer = setTimeout(action, delay);
+  }
+
+  function openMenuItem(index) {
+    menuCursor = index;
+    if (index === 0) scan();
+    else {
+      view = "placeholder";
+      render();
+    }
+  }
+
+  function scan() {
+    scanReturn = view;
+    view = "scanning";
+    render();
+    after(950, () => {
+      view = "list";
+      render();
+    });
+  }
+
+  function select(index) {
+    cursor = index;
+    keepVisible();
+    limitHint = false;
+    if (!saved.has(index)) {
+      if (selected.has(index)) selected.delete(index);
+      else if (selected.size < maxSelection) selected.add(index);
+      else limitHint = true;
+    }
+    render();
+  }
+
+  function keepVisible() {
+    offset = Math.min(offset, cursor);
+    offset = Math.max(offset, cursor - visibleRows + 1);
+  }
+
+  function start() {
+    if (selected.size === 0) return;
+    round = { targets: [...selected].sort((a, b) => a - b), index: 0, savedCount: 0, phase: "listen" };
+    view = "running";
+    render();
+    after(2300, beginSave);
+  }
+
+  function beginSave() {
+    if (view !== "running" || round.phase !== "listen") return;
+    round.phase = "save";
+    render();
+    after(500, () => finishAttempt(true));
+  }
+
+  function finishAttempt(success) {
+    const target = round.targets[round.index];
+    if (success) {
+      saved.add(target);
+      missed.delete(target);
+      round.savedCount++;
+    } else {
+      missed.add(target);
+    }
+    selected.delete(target);
+    round.index++;
+    const complete = round.index === round.targets.length;
+    if (view === "stopping") returnToList();
+    else if (complete) {
+      const firstMissed = round.targets.find((index) => missed.has(index));
+      if (firstMissed !== undefined) {
+        cursor = firstMissed;
+        keepVisible();
+      }
+      round.phase = "done";
+      render();
+      after(1550, returnToList);
+    } else {
+      round.phase = "listen";
+      render();
+      after(9500, beginSave);
+    }
+  }
+
+  function stop() {
+    if (view !== "running") return;
+    if (round.phase === "done") {
+      returnToList();
+      return;
+    }
+    view = "stopping";
+    render();
+    if (round.phase === "listen") after(350, returnToList);
+  }
+
+  function returnToList() {
+    clearTimeout(timer);
+    view = "list";
+    round = undefined;
+    limitHint = false;
+    render();
+  }
+
+  function handle(key) {
+    if (view === "home") {
+      if (key === "ok") openMenuItem(menuCursor);
+      else if (key === "up" || key === "down") {
+        const direction = key === "up" ? -1 : 1;
+        menuCursor = Math.max(0, Math.min(menu.length - 1, menuCursor + direction));
+        render();
+      }
+    } else if (view === "placeholder" && key === "back") {
+      view = "home";
+      render();
+    } else if (view === "scanning" && key === "back") {
+      clearTimeout(timer);
+      view = scanReturn;
+      render();
+    } else if (view === "list") {
+      if (key === "scan" || key === "left") scan();
+      else if (key === "right") start();
+      else if (key === "ok") select(cursor);
+      else if (key === "up" || key === "down") {
+        const direction = key === "up" ? -1 : 1;
+        cursor = Math.max(0, Math.min(networks.length - 1, cursor + direction));
+        keepVisible();
+        limitHint = false;
+        render();
+      } else if (key === "back") {
+        view = "home";
+        render();
+      }
+    } else if (view === "running") {
+      if (key === "ok") stop();
+      else if (key === "advance") beginSave();
+      else if (key === "miss" && round.phase === "listen") finishAttempt(false);
+    }
+  }
+
+  function glyph(character) {
+    return lcdGlyphs[character.charCodeAt(0) - 32] || lcdGlyphs[31];
+  }
+
+  function width(label) {
+    return Math.max(0, [...label].reduce((total, char) => total + glyph(char).length + 1, -1));
+  }
+
+  function fill(x, y, w, h, color = ink) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+  }
+
+  function text(label, x, y, color = ink, max = 124 - x) {
+    const end = x + max;
+    if (width(label) > max) {
+      let short = "";
+      for (const character of label) {
+        if (width(short + character + "...") > max) break;
+        short += character;
+      }
+      label = short + "...";
+    }
+    for (const character of label) {
+      const columns = glyph(character);
+      for (const [column, bits] of columns.entries()) {
+        if (x + column >= end) break;
+        for (let row = 0; row < 8; row++) {
+          if (bits & (1 << row)) fill(x + column, y + row, 1, 1, color);
+        }
+      }
+      x += columns.length + 1;
+    }
+  }
+
+  function right(label, y, color = ink) {
+    text(label, 123 - width(label), y, color);
+  }
+
+  function hitbox(label, action, x, y, w, h, pressed, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.screen = action;
+    button.setAttribute("aria-label", label);
+    if (pressed !== undefined) button.setAttribute("aria-pressed", String(pressed));
+    button.disabled = disabled;
+    button.style.inset = [y / 64, (128 - x - w) / 128, (64 - y - h) / 64, x / 128]
+      .map((position) => (position * 100) + "%").join(" ");
+    buttons.append(button);
+  }
+
+  function softKey(label, action, side) {
+    const buttonWidth = width(label) + 12;
+    const x = side === "left" ? 3 : side === "right" ? 125 - buttonWidth
+      : Math.floor((128 - buttonWidth) / 2);
+    fill(x + 1, 52, buttonWidth - 2, 12);
+    fill(x, 54, buttonWidth, 8);
+    text(label, x + 6, 55, paper);
+    hitbox(label.replace(/^[<>] | >$/g, ""), action, x, 50, buttonWidth, 14);
+  }
+
+  function mark(x, y, done, checked, color) {
+    if (!done) {
+      fill(x, y, 8, 1, color);
+      fill(x, y + 6, 8, 1, color);
+      fill(x, y + 1, 1, 5, color);
+      fill(x + 7, y + 1, 1, 5, color);
+    }
+    if (done || checked) {
+      const tick = [[1, 3], [2, 4], [3, 5], [4, 4], [5, 3], [6, 2]];
+      for (const [dx, dy] of tick) fill(x + dx, y + dy, 1, 1, color);
+    }
+  }
+
+  function renderList() {
+    text("Networks", 4, 3);
+    right(limitHint ? "Max 5" : selected.size + "/5 selected", 3);
+    fill(3, 13, 121, 1);
+    for (let row = 0; row < visibleRows; row++) {
+      const index = offset + row;
+      const y = 15 + row * 11;
+      const active = index === cursor;
+      const done = saved.has(index);
+      const notSeen = missed.has(index);
+      const color = active ? paper : ink;
+      if (active) fill(3, y, 120, 10);
+      mark(6, y + 1, done, selected.has(index), color);
+      const result = done ? "Captured" : notSeen ? "Not seen" : "";
+      const labelWidth = result ? 102 - width(result) : 103;
+      text(networks[index], 17, y + 1, color, labelWidth);
+      if (result) right(result, y + 1, color);
+      const resultLabel = done ? " — захвачена" : notSeen ? " — не найдена, можно повторить" : "";
+      hitbox(networks[index] + resultLabel, "row-" + index,
+        3, y, 120, 11, done ? undefined : selected.has(index), done);
+    }
+    if (offset > 0) fill(125, 16, 1, 3);
+    if (offset + visibleRows < networks.length) fill(125, 44, 1, 3);
+    softKey("< Scan", "scan", "left");
+    if (selected.size) softKey("Start (" + selected.size + ") >", "right", "right");
+    else right("OK Select", 55);
+    const chosen = [...selected].map((index) => networks[index]).join(", ") || "пусто";
+    const completed = [...saved].map((index) => networks[index]).join(", ") || "пока нет";
+    const notSeen = [...missed].map((index) => networks[index]).join(", ");
+    return "Найдено " + networks.length + " сетей. Выбрано " + selected.size + " из 5: " + chosen
+      + ". Захвачены: " + completed + "." + (notSeen ? " Не найдены: " + notSeen + "." : "")
+      + (limitHint ? " Максимум пять точек." : "");
+  }
+
+  function renderRound() {
+    const { index, targets, phase, savedCount } = round;
+    const current = networks[targets[index]];
+    const missedCount = index - savedCount;
+    const progress = "Захвачено " + savedCount + " из " + targets.length + "."
+      + (missedCount ? " Не найдены: " + missedCount + "." : "");
+    text("Capture", 4, 3);
+    right("Captured " + savedCount + "/" + targets.length, 3);
+    fill(3, 13, 121, 1);
+    if (view === "stopping") {
+      text(phase === "save" ? "Finishing save..." : "Stopping...", 4, 21);
+      text(current, 4, 34);
+      return "Остановка. " + progress;
+    }
+    if (phase === "done") {
+      text("Round complete", 4, 22);
+      if (missedCount) text("Not seen: " + missedCount, 4, 35);
+      softKey("Networks", "ok", "center");
+      return "Раунд завершён. " + progress;
+    }
+    text((phase === "save" ? "Saving " : "Listening ") + (index + 1) + "/" + targets.length, 4, 20);
+    text(current, 4, 31);
+    if (index > 0) {
+      const last = targets[index - 1];
+      const lastResult = saved.has(last) ? "Captured " : "Not seen ";
+      text(lastResult + networks[last], 4, 42);
+    }
+    softKey("Stop", "ok", "center");
+    return (phase === "save" ? "Сохраняем " : "Слушаем ") + current + ". " + progress;
+  }
+
+  function render() {
+    root.dataset.view = view;
+    const focused = buttons.contains(document.activeElement) ? document.activeElement.dataset.screen : null;
+    buttons.replaceChildren();
+    fill(0, 0, 128, 64, paper);
+    simulation.hidden = view !== "running" || round.phase === "done";
+    for (const button of simulation.querySelectorAll("button")) {
+      button.disabled = view !== "running" || round.phase !== "listen";
+    }
+    let description;
+    if (view === "home") {
+      text("AirRounds", 4, 3);
+      fill(3, 13, 121, 1);
+      menu.forEach((item, index) => {
+        const y = 15 + index * 12;
+        const active = index === menuCursor;
+        if (active) fill(3, y, 122, 11);
+        text(item, 7, y + 2, active ? paper : ink, 114);
+        hitbox(item, "menu-" + index, 3, y, 122, 12);
+      });
+      description = "Главное меню AirRounds. Фокус: " + menu[menuCursor] + ".";
+    } else if (view === "placeholder") {
+      text(menu[menuCursor], 4, 4);
+      softKey("Back", "back", "center");
+      description = menu[menuCursor] + ". Пустой раздел прототипа.";
+    } else if (view === "scanning") {
+      text("Scan area", 4, 4);
+      text("Scanning...", 4, 24);
+      softKey("Cancel", "back", "center");
+      description = "Поиск сетей.";
+    } else if (view === "list") description = renderList();
+    else description = renderRound();
+    status.textContent = description;
+    if (focused) {
+      const replacement = [...buttons.children].find((button) =>
+        button.dataset.screen === focused && !button.disabled);
+      (replacement || padOk).focus({ preventScroll: true });
+    }
+  }
+
+  root.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button || button.disabled) return;
+    const screen = button.dataset.screen;
+    if (screen?.startsWith("row-") && view === "list") select(Number(screen.slice(4)));
+    else if (screen?.startsWith("menu-") && view === "home") openMenuItem(Number(screen.slice(5)));
+    else handle(screen || button.dataset.key);
+  });
+
+  const keys = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", Enter: "ok", Escape: "back" };
+  document.addEventListener("keydown", (event) => {
+    if (!keys[event.key] || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Enter" && event.target.closest("button")) return;
+    event.preventDefault();
+    handle(keys[event.key]);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

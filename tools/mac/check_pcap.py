@@ -33,6 +33,8 @@ def observed_ssid(frame, bssid):
     # Beacon and probe response share a 24-byte header and 12 fixed body bytes.
     if len(frame) < 38 or frame[0] not in (0x80, 0x50) or frame[10:22] != bssid * 2:
         return None
+    if frame[0] == 0x80 and frame[4:10] != b"\xff" * 6:
+        return None
     # Skip protected, fragmented, DS, and optional-header forms.
     if frame[1] & 0xC7 or frame[22] & 0x0F:
         return None

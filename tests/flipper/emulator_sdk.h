@@ -259,6 +259,12 @@ inline void elements_slightly_rounded_box(Canvas*, int, int, int, int) {}
 inline void elements_button_center(Canvas* canvas, const char* label) {
     canvas->text.emplace_back(label);
 }
+inline uint16_t canvas_string_width(Canvas*, const char* text) {
+    return static_cast<uint16_t>(strlen(text) * 5);
+}
+inline void elements_button_left(Canvas* canvas, const char* label) {
+    canvas->text.emplace_back(label);
+}
 inline void elements_button_right(Canvas* canvas, const char* label) {
     canvas->text.emplace_back(label);
 }

@@ -1,8 +1,8 @@
 # AirRounds
 
 AirRounds is a passive Wi-Fi diagnostic tool for Flipper Zero and the ESP32-S2
-Wi-Fi Devboard. Run a round on one to three approved 2.4 GHz access points.
-Use Flipper to start the round and view each result. ESP32 saves beacons to
+Wi-Fi Devboard. Scan for nearby networks and run a round on one to five approved
+2.4 GHz access points. Use Flipper to select networks and view the results. ESP32 saves beacons to
 microSD. Use a Mac to check the files after transfer.
 
 | Directory | What it does |
@@ -15,7 +15,7 @@ microSD. Use a Mac to check the files after transfer.
 
 T0 starts with the source revisions and build tools. See the
 [development plan](docs/plan.md), [component map](docs/architecture.md), and
-[tool setup](docs/development.md).
+[tool setup](docs/development.md). See the [scan workflow and mockup](docs/ui-ux/scan-flow.md).
 
 ## Quality checks and project skills
 

@@ -91,6 +91,15 @@ void testFilteredCapture(const std::string& directory) {
     visit.receive(wrongAdvertisement.data(), wrongAdvertisement.size(), target.channel, 1);
     visit.receive(beacon.data(), beacon.size() - 1, target.channel, 1);
 
+    visit.receive(beacon.data(), 41, target.channel, 1); // Missing Supported Rates.
+    auto reversed = beacon;
+    reversed[36] = 1;
+    reversed[41] = 0;
+    visit.receive(reversed.data(), reversed.size(), target.channel, 1);
+    auto emptyRates = beacon;
+    emptyRates[42] = 0;
+    visit.receive(emptyRates.data(), 43, target.channel, 1);
+
     auto data = beacon;
     data[0] = 0x08;
     visit.receive(data.data(), data.size(), target.channel, 1);

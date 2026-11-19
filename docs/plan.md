@@ -9,8 +9,8 @@ See the [T0 report](t0.md) for the results and open checks.
 
 - Use a Flipper Zero, an ESP32-S2 Wi-Fi Devboard, and a microSD adapter for the
   board.
-- Run a session on two or three approved 2.4 GHz access points. Support the
-  single-access-point case during development.
+- The current scan workflow runs on one to five approved 2.4 GHz access
+  points. The original three-point profile remains a legacy workflow.
 - Show progress and the result for each access point on Flipper. ESP32 writes
   a PCAP file and a log to its microSD card. Transfer the files to a Mac for
   an independent check.
@@ -119,7 +119,7 @@ the limits and what happens when a visit uses its time.
 | T5b: Flipper interface | T5a | Show distinct states for stop, save in progress, success, and error. Leave the screen and return to see the current state. |
 | T6: Up to three access points | T5b | Test zero, one, and three points, shared and distinct channels, loss or channel change, no traffic, and completion of all visits. |
 | T8: Observation windows | T6 | Limit extensions, ignore repeated observations, serve other points fairly, and enforce the absolute deadline. |
-| T9: Hardware acceptance | T8 | Record each bench result or the equipment gap that blocked it. For a successful case, check the file against the log. Keep unrun checks open. |
+| [T9: Hardware acceptance](t9.md) | T8 | Closed for the original beacon criteria. The report records the deferred checks and the later scan workflow evidence. |
 
 ## Bench checks and handoff
 

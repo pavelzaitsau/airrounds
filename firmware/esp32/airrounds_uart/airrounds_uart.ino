@@ -12,7 +12,8 @@ void setup() {
 
 void loop() {
     static const uint64_t boot = randomId();
-    static Protocol protocol(PassiveVisit::instance(), boot == 0 ? 1 : boot);
+    auto& visit = PassiveVisit::instance();
+    static Protocol protocol(visit, boot == 0 ? 1 : boot, &visit);
 
     // Keep the observation deadline and SD completion independent of UART traffic.
     constexpr size_t budget = 128;

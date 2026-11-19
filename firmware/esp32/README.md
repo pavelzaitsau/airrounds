@@ -2,7 +2,8 @@
 
 The storage writer writes blocks to a new file on a mounted microSD card.
 The [toolchain example](../../tests/toolchain/esp32/airrounds_storage_smoke)
-connects the writer to the Arduino SD library.
+connects the writer to the Arduino SD library. The current radio workflow
+saves one beacon per verified PCAP.
 
 ## Write blocks
 
@@ -86,13 +87,20 @@ visit reports `not_observed`. A card or file error reports `storage_error`.
 See the [T4 checks](../../tests/README.md#one-passive-access-point) for
 the host test and the bench commands.
 
+## Scan for nearby networks
+
+The board listens for beacons on its allowed 2.4 GHz channels, up to 180 ms
+per channel. It retains up to 16 distinct BSSIDs and SSIDs in RAM, favoring stronger signals. Discovery
+does not open microSD. It uses the same receive-only radio as a capture,
+so scanning and capture take turns. See the [UART scan commands][uart].
+
 ## Run a round over UART
 
 Build the `airrounds_uart` sketch with `make embedded`. The image is under
 `artifacts/quality/esp32/airrounds_uart/`. It listens on the Devboard's UART
 pins and writes captures to the microSD card.
 
-The board copies the profile when it accepts a round. It visits BSSIDs
+The board copies a profile of up to five access points when it accepts a round. It visits BSSIDs
 in order on the channels in the profile, up to the round deadline.
 Points on the same channel have separate visits. The board keeps the first
 valid beacon from each point for its PCAP.
@@ -120,3 +128,33 @@ or a reboot. The PCAP files and receipts stay on the card.
 See the [UART protocol][uart] for wiring, commands, and file names.
 
 [uart]: ../../docs/uart.md
+
+### On-card session log
+
+Before listening, the firmware tries to write a session checkpoint to
+`session-<boot>-<session>.log.open` on microSD. It records the build, Git
+revision, UART version, passive mode, start time, time budget, and ordered
+BSSID and channel pairs. If the board resets mid-round, the checkpoint can be
+matched to any verified PCAPs by boot ID, session ID, and point order.
+
+At the end of the round the firmware writes `session-<boot>-<session>.log`.
+The final log also records the end time, overall result, and per-point
+results and statistics. These include the listening interval, management
+frames delivered to the receive callback, accepted matching beacons,
+filtered frames, write-queue overflows, bytes accepted by storage, verified
+PCAP size, and saved filename. Skipped points use `outcome=none` and zero
+counts.
+
+The writer syncs each staging file and reads it back byte for byte before
+publishing it. A leftover `.log.open.part` or `.log.part` can help diagnose
+an interrupted write. Once the verified `.log` is published, the writer
+removes the checkpoint. If both files are on the card, use the final
+`.log`. A checkpoint requires a writable card before listening begins.
+
+The round stays `finalizing` until the final log attempt finishes. Query
+`round_status_log` for the log status. Flipper shows `Session log failed`
+if the board reports a journal failure. The PCAP result still reflects
+only the capture.
+
+`make embedded` sets the source build ID and Git revision. Set
+`AIRROUNDS_REVISION` to a full Git SHA when building an exported tree.

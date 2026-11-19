@@ -7,7 +7,7 @@ namespace airrounds {
 namespace flipper {
 
 enum class Link { connecting, ready, lost, incompatible };
-enum class Request { none, hello, status, start, stop };
+enum class Request { none, hello, status, start, stop, scan, scan_read, scan_stop };
 
 class SessionClient {
 public:
@@ -22,14 +22,47 @@ public:
     uart::VisitId visitId() const { return {boot_, snapshot_.session}; }
     uart::State state() const { return snapshot_.state; }
     uart::Outcome outcome() const { return snapshot_.outcome; }
+    uart::JournalState journalState() const { return snapshot_.journal; }
 
     const uart::RoundStatus& round() const { return snapshot_.round; }
     bool supportsRounds() const { return link_ == Link::ready && supportsRounds_; }
 
+    bool supportsScan() const { return supportsScan_; }
+    bool supportsRoundDetail() const { return supportsRoundDetail_; }
+    uart::ScanState scanState() const { return scanState_; }
+    const uart::ScanList& scanResults() const { return scanResults_; }
+
     bool canStart(size_t count = 1) const {
-        return count > 0 && count <= (supportsRounds() ? session::Profile::capacity : 1U) &&
-               canMutate() && snapshot_.session != UINT32_MAX && state() != uart::State::running &&
-               state() != uart::State::finalizing;
+        const size_t limit = supportsScan_      ? session::Profile::capacity
+                             : supportsRounds() ? session::Profile::legacyCapacity
+                                                : 1U;
+        return count > 0 && count <= limit && canMutate() && snapshot_.session != UINT32_MAX &&
+               state() != uart::State::running && state() != uart::State::finalizing &&
+               scanState_ != uart::ScanState::running;
+    }
+
+    bool scan(uint32_t now) {
+        if (!supportsScan_ || !canMutate() || state() == uart::State::running ||
+            state() == uart::State::finalizing || scanState_ == uart::ScanState::running) {
+            return false;
+        }
+        scanResults_.clear();
+        scanExpectedCount_ = 0;
+        scanState_ = uart::ScanState::running;
+        request(Request::scan, now);
+        return true;
+    }
+
+    bool cancelScan(uint32_t now) {
+        if (scanState_ != uart::ScanState::running || link_ != Link::ready) {
+            return false;
+        }
+        if (pending_ == Request::scan) {
+            cancelScanPending_ = true;
+        } else if (pending_ != Request::scan_stop && canMutate()) {
+            request(Request::scan_stop, now);
+        }
+        return true;
     }
 
     bool canStop() const {
@@ -82,6 +115,11 @@ public:
         if (now - wait_.since >= wait_.duration) {
             if (boot_ == 0) {
                 request(Request::hello, now);
+            } else if (cancelScanPending_) {
+                cancelScanPending_ = false;
+                request(Request::scan_stop, now);
+            } else if (scanState_ == uart::ScanState::running) {
+                request(Request::scan_read, now);
             } else {
                 request(Request::status, now);
             }
@@ -115,7 +153,10 @@ private:
     static constexpr uint32_t reconnectMs = 300;
     static constexpr uint32_t pollMs = 350;
 
-    bool mutationPending() const { return pending_ == Request::start || pending_ == Request::stop; }
+    bool mutationPending() const {
+        return pending_ == Request::start || pending_ == Request::stop ||
+               pending_ == Request::scan || pending_ == Request::scan_stop;
+    }
 
     bool canMutate() const {
         return link_ == Link::ready && !mutationPending() &&
@@ -124,6 +165,10 @@ private:
 
     void reconnect(Link reason, uint32_t now) {
         boot_ = 0;
+        if (scanState_ == uart::ScanState::running) {
+            scanState_ = uart::ScanState::error;
+        }
+        cancelScanPending_ = false;
         link_ = reason;
         pending_ = Request::none;
         length_ = 0;
@@ -150,6 +195,7 @@ private:
         const char* verb = "hello";
         uint32_t scope = 0;
         expectsRound_ = false;
+        expectsJournal_ = false;
         if (kind == Request::start) {
             scope = snapshot_.session + 1U;
             expectsRound_ = supportsRounds_;
@@ -158,9 +204,22 @@ private:
             scope = snapshot_.session;
             expectsRound_ = supportsRounds_;
             verb = expectsRound_ ? "round_stop" : "stop";
+        } else if (kind == Request::scan) {
+            scanId_ = id;
+            verb = "scan";
+        } else if (kind == Request::scan_read) {
+            verb = "scan_read";
+        } else if (kind == Request::scan_stop) {
+            verb = "scan_stop";
         } else if (kind == Request::status) {
             expectsRound_ = supportsRounds_;
+            expectsJournal_ = supportsJournal_;
             verb = expectsRound_ ? "round_status" : "status";
+            if (supportsRoundDetail_) {
+                verb = "round_status_detail";
+            } else if (expectsJournal_) {
+                verb = "round_status_log";
+            }
         }
         key_ = {boot_, id, scope};
 
@@ -178,6 +237,14 @@ private:
         const size_t verbLength = strlen(verb);
         memcpy(out, verb, verbLength);
         out += verbLength;
+        if (kind == Request::scan_read || kind == Request::scan_stop) {
+            *out++ = ' ';
+            out = hex<16>(out, scanId_);
+        }
+        if (kind == Request::scan_read) {
+            *out++ = ' ';
+            out = hex<2>(out, scanResults_.size());
+        }
         for (size_t index = 0; profile != nullptr && index < profile->size(); ++index) {
             const auto& target = (*profile)[index];
             *out++ = ' ';
@@ -219,6 +286,11 @@ private:
                 return;
             }
             supportsRounds_ = (reply.features & uart::passiveRoundFeature) != 0;
+            supportsScan_ = supportsRounds_ && (reply.features & uart::scanFeature) != 0;
+            supportsRoundDetail_ =
+                supportsRounds_ && (reply.features & uart::roundDetailFeature) != 0;
+            supportsJournal_ =
+                supportsRounds_ && (reply.features & uart::sessionJournalFeature) != 0;
             boot_ = reply.envelope.key.boot;
             if (boot_ != mutationBoot_) {
                 mutationBoot_ = boot_;
@@ -232,7 +304,56 @@ private:
             return;
         }
 
-        acceptStatus(reply, now);
+        if (pending_ == Request::scan || pending_ == Request::scan_read ||
+            pending_ == Request::scan_stop) {
+            acceptScan(reply, now);
+        } else {
+            acceptStatus(reply, now);
+        }
+    }
+
+    void acceptScan(const uart::Reply& reply, uint32_t now) {
+        using uart::ScanState;
+        if (reply.hasRound || reply.hasJournal ||
+            (reply.code == uart::Code::ok &&
+             (reply.hasScan != (pending_ == Request::scan_read) ||
+              (mutationPending() && reply.lastMutation != key_.request)))) {
+            return;
+        }
+        rememberMutation(reply.lastMutation);
+        if (reply.code != uart::Code::ok) {
+            scanState_ = ScanState::error;
+        } else if (pending_ == Request::scan_stop) {
+            scanState_ = ScanState::idle;
+        } else if (pending_ == Request::scan_read && !cancelScanPending_) {
+            collectScan(reply.scan);
+        }
+        pending_ = Request::none;
+        if (scanState_ != ScanState::running) {
+            cancelScanPending_ = false;
+        }
+        wait_ = {now, reply.hasScan && reply.scan.state == ScanState::running && !cancelScanPending_
+                          ? pollMs
+                          : 0};
+    }
+
+    void collectScan(const uart::ScanReply& result) {
+        using uart::ScanState;
+        if (result.state == ScanState::running && scanExpectedCount_ == 0) {
+            return;
+        }
+        if (result.state != ScanState::complete || result.index != scanResults_.size() ||
+            (scanExpectedCount_ != 0 && result.count != scanExpectedCount_)) {
+            scanState_ = ScanState::error;
+            return;
+        }
+        scanExpectedCount_ = result.count;
+        if (result.count != 0 &&
+            !scanResults_.add(result.entry.target, result.entry.name, result.entry.nameSize)) {
+            scanState_ = ScanState::error;
+        } else if (scanResults_.size() == result.count) {
+            scanState_ = ScanState::complete;
+        }
     }
 
     static bool validSnapshot(const uart::Reply& reply) {
@@ -261,7 +382,10 @@ private:
         const auto& round = reply.round;
         const size_t count = round.profile.size();
         const size_t next = round.next();
-        if ((count == 0) != (reply.state == State::idle)) {
+        if ((count == 0) != (reply.state == State::idle) ||
+            (round.interruption == uart::VisitInterruption::yes &&
+             (reply.state != State::stopped || next == 0 ||
+              round.results[next - 1] != Outcome::not_observed))) {
             return false;
         }
         bool saved = false;
@@ -335,7 +459,10 @@ private:
             wait_ = {now, 0};
             return;
         }
-        if (!validSnapshot(reply) || reply.hasRound != expectsRound_ ||
+        const bool expectsDetail = pending_ == Request::status && supportsRoundDetail_;
+        const bool hasDetail = reply.round.interruption != uart::VisitInterruption::unknown;
+        if (!validSnapshot(reply) || reply.hasScan || reply.hasRound != expectsRound_ ||
+            reply.hasJournal != expectsJournal_ || hasDetail != expectsDetail ||
             (reply.hasRound && (!validRound(reply) || !consistentRound(reply))) ||
             (mutation && (reply.session != key_.scope || reply.lastMutation != key_.request))) {
             return;
@@ -365,7 +492,16 @@ private:
     uart::Reply snapshot_;
     session::Profile requestedProfile_;
     bool supportsRounds_ = false;
+    bool supportsScan_ = false;
+    bool supportsRoundDetail_ = false;
+    bool cancelScanPending_ = false;
+    uint64_t scanId_ = 0;
+    size_t scanExpectedCount_ = 0;
+    uart::ScanState scanState_ = uart::ScanState::idle;
+    uart::ScanList scanResults_;
     bool expectsRound_ = false;
+    bool supportsJournal_ = false;
+    bool expectsJournal_ = false;
     Link link_ = Link::connecting;
     Request pending_ = Request::none;
     Request rejected_ = Request::none;

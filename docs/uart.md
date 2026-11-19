@@ -2,7 +2,8 @@
 
 ESP32-S2 runs one passive round at a time. It listens for one beacon per
 access point. The client controls the round over UART. Copy each PCAP and
-its receipt from the SD card.
+its receipt from the SD card. `saved` in this protocol confirms the beacon
+file.
 
 ## Connect
 
@@ -11,7 +12,7 @@ Use 3.3 V logic and a common ground. Connect ESP32-S2 GPIO 43 (TX) to
 Flipper pin 14 (RX) and GPIO 44 (RX) to Flipper pin 13 (TX).
 
 Send ASCII frames with one space between fields and a line feed at the end.
-Requests begin with `@` and have up to 99 bytes between the marker and line
+Requests begin with `@` and have up to 143 bytes between the marker and line
 feed. A new `@` discards any partial request. The parser also discards
 a partial request if 100 ms or more pass between byte reads. Send a whole
 line in one write.
@@ -19,7 +20,7 @@ line in one write.
 The board drops malformed headers and incomplete frames. For each valid
 header, it sends one reply. Read the reply from `!` through the next line
 feed. A new `!` replaces any partial reply. Boot text can appear before `!`
-on the same line. Allow up to 191 bytes from the reply marker through the
+on the same line. Allow up to 239 bytes from the reply marker through the
 line feed. Replies to the original commands still fit in 127 bytes. Drop a reply if it has missing, extra, or invalid fields.
 
 ## Request and reply fields
@@ -38,14 +39,14 @@ line feed. Replies to the original commands still fit in 127 bytes. Drop a reply
 | `session` | Eight hex digits. The latest accepted session. Zero means idle after boot. |
 | `code` | Result of the command. |
 | `state`, `result` | Current session state and overall result. |
-| `last_mutation` | Sixteen hex digits. The highest start or stop request ID processed in this boot. |
-| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. |
+| `last_mutation` | Sixteen hex digits. The highest mutation request ID processed in this boot. |
+| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. Bit 2 supports the session journal status. Bit 3 supports scanning and five-point rounds. Bit 4 supports round interruption details. |
 
 Use lowercase hex throughout. In a `hello` reply, the board sends its own
 version and boot ID. Other replies echo both fields from the request.
 For `hello` and `status`, use a fresh request ID with its top bit
 set. Use random IDs for these reads if the client does not keep a counter
-across restarts. For `start` and `stop`, use IDs from
+across restarts. For mutations, use IDs from
 `0000000000000001` through `7fffffffffffffff`, in increasing order.
 
 ## Commands
@@ -81,6 +82,7 @@ Session IDs and mutation request IDs do not wrap within a boot.
 | `busy` | The current visit is running or saving. |
 | `conflict` | The same request ID changed content, or the current session changed target. |
 | `stale_request` | A newer mutation request ID has already reached the board. |
+| `radio_error` | `scan_stop` could not shut down the scan receiver. |
 
 ### Visit status
 
@@ -98,15 +100,43 @@ the reply. The board reports `saved` after it checks the closed file and
 publishes the receipt. If a stop ends a quiet visit, the reply can report
 `stopped` and `not_observed` at once.
 
+## Scan for networks
+
+Use these commands when the board advertises feature bit 3. A scan and a
+capture round share the receiver. Starting one while the other runs returns
+`busy`. A scan does not write a PCAP or a session journal.
+
+| Command | Scope | Request and arguments |
+| --- | --- | --- |
+| `scan` | Zero | Mutation. Start a scan with no arguments. Its request ID identifies this scan. Retrying the same command does not start over. |
+| `scan_read` | Zero | Read request. Send the scan's 16-digit request ID and a zero-based, two-digit hex row index. |
+| `scan_stop` | Zero | Mutation. Send the scan's 16-digit request ID to cancel it. Returns `radio_error` if cleanup fails. |
+
+An OK `scan_read` reply appends
+`scan <state> <count> <index>`. State is
+`idle`, `running`, `complete`, or
+`error`. Count and index are two hex digits. While waiting, or
+when there are zero results, both are zero. A nonempty complete reply then
+appends three fields: the 12-digit BSSID, the two-digit channel, and the
+SSID encoded in lowercase hex (up to 32 bytes). A zero-length SSID is
+`-`. Read indices zero through count minus one before showing
+the result. The board returns at most 16 distinct BSSIDs, favoring stronger signals when the list fills.
+
+The board hears only 2.4 GHz management beacons on channels permitted by
+its configured regulatory domain. It holds the list in RAM. A new scan
+replaces it. Scan IDs belong to one boot and cannot read another scan's list.
+
 ## Run more than one visit
 
 Use these commands when the board advertises feature bit 1.
 
 | Command | Scope | Arguments and effect |
 | --- | --- | --- |
-| `round` | Current session ID plus 1 | Send one to three BSSID and channel pairs in visit order. Use the same field widths as `start`. |
+| `round` | Current session ID plus 1 | Send one to three BSSID and channel pairs in visit order, or up to five with feature bit 3. Use the same field widths as `start`. |
 | `round_stop` | Current nonzero session ID | Stop reception and save any beacon already in hand. Finish a save in progress and skip later visits. |
 | `round_status` | Zero or current session ID | Read the current round and its results. Use a read request ID, as for `status`. |
+| `round_status_log` | Zero or current session ID | With feature bit 2, read the round results and microSD journal status. Use a read request ID and no arguments. |
+| `round_status_detail` | Zero or current session ID | With feature bit 4, read the round results and interruption detail. Includes journal status when bit 2 is set. Use a read request ID and no arguments. |
 
 The board rejects an empty list and a repeated BSSID. A retry for the current
 session uses the same pairs in the same order. The board visits the pairs
@@ -134,6 +164,27 @@ A complete or stopped round reports an overall result of `saved` if at
 least one point saved a beacon. Otherwise it reports `not_observed`.
 Read the `aps` fields for each result. The original `hello`, `start`,
 `stop`, and `status` replies use the original fields.
+
+A `round_status_log` reply inserts `journal <state>` before the usual
+`aps` fields. `round_status_detail` inserts `interrupted <flag>` just before
+`aps`, after the optional journal field. Flag `1` means Stop interrupted the
+last `not_observed` point. Flag `0` covers all other cases, including a point
+that finished without a beacon before the round deadline prevented the next
+visit. The client can keep the interrupted point selected and mark a completed
+miss **Not seen**. The existing round replies keep their formats.
+
+| Journal state | Meaning |
+| --- | --- |
+| `none` | No session has started since boot. |
+| `pending` | The checkpoint is being written, the round is in progress, or the final write is in progress. |
+| `saved` | The final journal was verified and published on microSD. |
+| `failed` | The latest journal write attempt failed. The capture has its own result in the same reply. |
+
+With the journal feature, `running` can include the card checkpoint write
+before reception begins. The checkpoint write counts toward the round
+deadline. A stop during that write ends with `not_observed` for the first
+point and skips later points. No listening time is recorded. If the write uses
+the entire budget, the board reports `storage_error` before opening the radio.
 
 On the card, a multi-point round uses `visit-<boot>-<session>-<slot>.pcap`.
 Slots start at 1 and follow the request order. Use the matching `.pcap.ok`

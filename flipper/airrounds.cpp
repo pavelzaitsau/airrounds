@@ -14,6 +14,7 @@
 #include <gui/view_dispatcher.h>
 
 #include "../firmware/esp32/uart/capture_path.h"
+#include "network_list.h"
 #include "profile_storage.h"
 #include "ui_state.h"
 
@@ -31,6 +32,9 @@ using uart::VisitId;
 
 enum class Page {
     home,
+    scan,
+    networks,
+    placeholder,
     points,
     point,
     address,
@@ -47,6 +51,9 @@ enum class Page {
 
 enum class Action : uint8_t {
     none,
+    scan,
+    selectNetwork,
+    placeholder,
     board,
     start,
     stop,
@@ -83,16 +90,22 @@ struct Row {
 struct Frame {
     char title[25]{};
     char hint[25]{};
-    Row rows[3]{};
+    char titleRight[17]{};
+    char leftKey[10]{};
+    char rightKey[15]{};
+    Row rows[4]{};
     size_t count = 0;
     int selected = -1;
     int column = 68;
     bool pointMenu = false;
+    bool compact = false;
+    bool scrollUp = false;
+    bool scrollDown = false;
     bool fileLink = false;
     Binding binding{};
 
     void row(const char* left, const char* right = "") {
-        if (count < 3) {
+        if (count < sizeof(rows) / sizeof(rows[0])) {
             snprintf(rows[count].left, sizeof(rows[count].left), "%s", left);
             snprintf(rows[count].right, sizeof(rows[count].right), "%s", right);
             ++count;
@@ -103,7 +116,10 @@ struct Frame {
         return strcmp(title, other.title) == 0 && strcmp(hint, other.hint) == 0 &&
                memcmp(rows, other.rows, sizeof(rows)) == 0 && count == other.count &&
                selected == other.selected && column == other.column &&
-               pointMenu == other.pointMenu && fileLink == other.fileLink &&
+               pointMenu == other.pointMenu && compact == other.compact &&
+               scrollUp == other.scrollUp && scrollDown == other.scrollDown &&
+               fileLink == other.fileLink && strcmp(titleRight, other.titleRight) == 0 &&
+               strcmp(leftKey, other.leftKey) == 0 && strcmp(rightKey, other.rightKey) == 0 &&
                binding.matches(other.binding);
     }
 };
@@ -131,6 +147,16 @@ struct App {
     std::atomic<bool> damaged{false};
 
     session::Profile profile;
+    flipper::NetworkList networks;
+    VisitId networkRun{};
+    size_t networkFocus = 0;
+    size_t placeholder = 0;
+    Page scanOrigin = Page::home;
+    size_t scanOriginFocus = 0;
+    bool scanStarted = false;
+    bool scanCancel = false;
+    bool selectionLimit = false;
+    bool networkLogFailed = false;
     session::Target draft{{}, 1};
     RunReport latest;
     RunReport selectedReport;
@@ -157,6 +183,8 @@ struct App {
 
 const char* actionLabel(Action action) {
     switch (action) {
+    case Action::scan:
+        return "Scan";
     case Action::start:
         return "Start";
     case Action::stop:
@@ -196,6 +224,22 @@ void channelText(uint8_t channel, char (&text)[8]) {
     snprintf(text, sizeof(text), "Ch %u", static_cast<unsigned>(channel));
 }
 
+constexpr size_t visibleNetworkRows = 3;
+constexpr const char* scanMenu[]{"Scan area", "Flash board hardware", "Test board", "About"};
+
+size_t topRow(size_t focus) {
+    return focus < visibleNetworkRows ? 0 : focus - visibleNetworkRows + 1;
+}
+
+void networkName(const App& app, const session::Target& target, size_t slot, char (&name)[25]) {
+    const auto row = app.networks.find(target);
+    if (row < app.networks.size()) {
+        app.networks.label(row, name);
+    } else {
+        snprintf(name, sizeof(name), "Point %u", static_cast<unsigned>(slot + 1));
+    }
+}
+
 bool canStart(const App& app) {
     return app.serial != nullptr && app.client.canStart(app.profile.size());
 }
@@ -209,6 +253,7 @@ RunReport currentRun(const App& app) {
     report.id = app.client.visitId();
     report.state = app.client.state();
     report.outcome = app.client.outcome();
+    report.journal = app.client.journalState();
     report.round = app.client.round();
     if (report.round.profile.size() == 0 && report.id.session != 0 &&
         report.id.matches(app.legacyTargetId)) {
@@ -225,11 +270,14 @@ void showOutcome(Frame& frame, const RunReport& report) {
     }
     title(frame, flipper::outcomeTitle(report));
     char count[32];
-    snprintf(count, sizeof(count), "%u of %u saved", flipper::savedPoints(report),
+    snprintf(count, sizeof(count), "%u of %u captured", flipper::savedPoints(report),
              static_cast<unsigned>(flipper::reportSize(report)));
     frame.row(count);
     if (report.outcome == Outcome::storage_error) {
         frame.row("Check board SD");
+    }
+    if (report.journal == uart::JournalState::failed) {
+        frame.row("Session log failed");
     }
     frame.binding = {Action::results, 0, report.id};
 }
@@ -250,6 +298,24 @@ const char* boardIssue(const App& app) {
         return "Board unavailable";
     }
     return "Checking status";
+}
+
+void showNetworkProgress(Frame& frame, const App& app) {
+    const auto report = currentRun(app);
+    const auto slot = report.round.next();
+    const auto total = report.round.profile.size();
+    title(frame, "Capture");
+    snprintf(frame.titleRight, sizeof(frame.titleRight), "Captured %u/%u",
+             flipper::savedPoints(report), static_cast<unsigned>(total));
+    frame.row(report.state == State::running ? "Listening" : "Saving");
+    if (slot < total) {
+        char name[25];
+        networkName(app, report.round.profile[slot], slot, name);
+        frame.row(name);
+    }
+    if (app.client.canStop() && !app.acknowledgedStop.matches(report.id)) {
+        frame.binding = {Action::stop, 0, report.id};
+    }
 }
 
 void showStatus(Frame& frame, const App& app) {
@@ -287,6 +353,8 @@ void showStatus(Frame& frame, const App& app) {
         title(frame, client.rejected() == Request::start ? "Start rejected" : "Stop rejected");
         frame.row("Session status updated");
         frame.binding = {Action::refresh, 0, client.visitId()};
+    } else if (flipper::sessionBusy(client.state()) && client.supportsScan()) {
+        showNetworkProgress(frame, app);
     } else if (flipper::sessionBusy(client.state())) {
         const auto report = currentRun(app);
         const auto slot = report.round.next();
@@ -320,6 +388,18 @@ void showStatus(Frame& frame, const App& app) {
 
 void showHome(Frame& frame, const App& app) {
     title(frame, "AirRounds");
+    if (app.client.supportsScan()) {
+        frame.compact = true;
+        const bool busy = flipper::sessionBusy(app.client.state()) || unconfirmedStart(app);
+        for (size_t row = 0; row < sizeof(scanMenu) / sizeof(scanMenu[0]); ++row) {
+            frame.row(row == 0 && busy ? "Session status" : scanMenu[row]);
+        }
+        frame.selected = static_cast<int>(app.focus);
+        const auto action =
+            app.focus == 0 ? (busy ? Action::status : Action::scan) : Action::placeholder;
+        frame.binding = {action, app.focus, {}};
+        return;
+    }
     const auto pending = app.client.pending();
     auto first = flipper::homeEntry(pending, app.client.state(), app.profile.size(), canStart(app));
     if (app.restarted || (unconfirmedStart(app) && app.client.link() != Link::ready)) {
@@ -374,11 +454,79 @@ void profileAction(Frame& frame, const App& app, const char* pageTitle, Action a
     }
 }
 
+void showScan(Frame& frame, const App& app) {
+    if (app.scanStarted && app.client.scanState() == uart::ScanState::running) {
+        title(frame, app.scanCancel ? "Canceling..." : "Scanning...");
+        frame.row("Listening for networks");
+        if (!app.scanCancel) {
+            frame.row("Back to cancel");
+        }
+        return;
+    }
+    title(frame, app.scanCancel ? "Cancel failed" : "Scan failed");
+    frame.row("Check Devboard");
+    frame.binding = {Action::scan, 0, {}};
+}
+
+void showNetworks(Frame& frame, const App& app) {
+    title(frame, "Beacons");
+    frame.compact = true;
+    const auto count = app.networks.size();
+    const auto selected = static_cast<uint8_t>(app.networks.selection().size());
+    snprintf(frame.titleRight, sizeof(frame.titleRight), "%u/5 selected",
+             static_cast<unsigned>(selected));
+    snprintf(frame.leftKey, sizeof(frame.leftKey), "Scan");
+    if (selected != 0 && app.client.canStart(selected)) {
+        snprintf(frame.rightKey, sizeof(frame.rightKey), "Start (%u)",
+                 static_cast<unsigned>(selected));
+    }
+    if (count == 0) {
+        frame.row("No networks found");
+        return;
+    }
+    const size_t first = topRow(app.focus);
+    frame.scrollUp = first > 0;
+    frame.scrollDown = first + visibleNetworkRows < count;
+    frame.selected = static_cast<int>(app.focus - first);
+    for (size_t row = first; row < count && row < first + visibleNetworkRows; ++row) {
+        const auto outcome = app.networks.outcome(row);
+        char name[25];
+        app.networks.label(row, name);
+        char label[27];
+        const auto* marker = outcome == Outcome::saved    ? "+ "
+                             : app.networks.selected(row) ? "[x] "
+                                                          : "[ ] ";
+        snprintf(label, sizeof(label), "%s%.20s", marker, name);
+        const char* status = outcome == Outcome::none ? ""
+                             : outcome == Outcome::saved
+                                 ? "Saved"
+                                 : flipper::pointResult(outcome, State::complete);
+        frame.row(label, status);
+    }
+    if (app.selectionLimit) {
+        snprintf(frame.titleRight, sizeof(frame.titleRight), "Maximum 5");
+    } else if (app.networkLogFailed) {
+        snprintf(frame.titleRight, sizeof(frame.titleRight), "Log failed");
+    } else if (app.client.link() != Link::ready) {
+        snprintf(frame.titleRight, sizeof(frame.titleRight), "Board offline");
+    }
+    frame.binding = {Action::selectNetwork, app.focus, {}};
+}
+
 Frame makeFrame(const App& app) {
     Frame frame;
     switch (app.page) {
     case Page::home:
         showHome(frame, app);
+        break;
+    case Page::scan:
+        showScan(frame, app);
+        break;
+    case Page::networks:
+        showNetworks(frame, app);
+        break;
+    case Page::placeholder:
+        title(frame, scanMenu[app.placeholder]);
         break;
     case Page::points:
         title(frame, "Access points");
@@ -389,7 +537,7 @@ Frame makeFrame(const App& app) {
             channelText(app.profile[i].channel, channel);
             frame.row(name, channel);
         }
-        if (app.profile.size() < session::Profile::capacity) {
+        if (app.profile.size() < session::Profile::legacyCapacity) {
             frame.row("Add point");
         }
         frame.selected = static_cast<int>(app.focus);
@@ -464,17 +612,27 @@ Frame makeFrame(const App& app) {
             showOutcome(frame, app.latest);
         }
         break;
-    case Page::results:
+    case Page::results: {
         title(frame, "Results");
-        for (size_t i = 0; i < flipper::reportSize(app.selectedReport); ++i) {
-            char name[12];
-            pointText(i, name);
+        const auto count = flipper::reportSize(app.selectedReport);
+        const size_t first = topRow(app.focus);
+        for (size_t i = first; i < count && i < first + visibleNetworkRows; ++i) {
+            char name[25];
+            if (app.client.supportsScan() && i < app.selectedReport.round.profile.size()) {
+                networkName(app, app.selectedReport.round.profile[i], i, name);
+            } else {
+                snprintf(name, sizeof(name), "Point %u", static_cast<unsigned>(i + 1));
+            }
             frame.row(name, flipper::pointResult(flipper::pointOutcome(app.selectedReport, i),
                                                  app.selectedReport.state));
         }
-        frame.selected = static_cast<int>(app.focus);
+        frame.compact = app.client.supportsScan();
+        frame.scrollUp = first > 0;
+        frame.scrollDown = first + visibleNetworkRows < count;
+        frame.selected = static_cast<int>(app.focus - first);
         frame.binding = {Action::detail, app.focus, app.selectedReport.id};
         break;
+    }
     case Page::detail: {
         char name[12];
         pointText(app.resultPoint, name);
@@ -483,12 +641,18 @@ Frame makeFrame(const App& app) {
         frame.row(flipper::pointDetail(outcome, app.selectedReport.state));
         if (app.resultPoint < app.selectedReport.round.profile.size()) {
             const auto& target = app.selectedReport.round.profile[app.resultPoint];
-            char address[18];
-            char channel[8];
-            addressText(target, address);
-            channelText(target.channel, channel);
-            frame.row(address);
-            frame.row(channel);
+            if (app.client.supportsScan()) {
+                char label[25];
+                networkName(app, target, app.resultPoint, label);
+                frame.row(label);
+            } else {
+                char address[18];
+                char channel[8];
+                addressText(target, address);
+                channelText(target.channel, channel);
+                frame.row(address);
+                frame.row(channel);
+            }
         } else {
             frame.row("Address unavailable");
         }
@@ -525,17 +689,39 @@ void draw(Canvas* canvas, void* model) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 4, 11, frame.title);
     canvas_set_font(canvas, FontSecondary);
+    if (frame.titleRight[0] != '\0') {
+        canvas_draw_str(canvas, 124 - canvas_string_width(canvas, frame.titleRight), 11,
+                        frame.titleRight);
+    }
     for (size_t i = 0; i < frame.count; ++i) {
         const bool selected = static_cast<int>(i) == frame.selected;
-        const auto y = frame.pointMenu       ? 24 + static_cast<int>(i) * 14
+        const auto y = frame.compact         ? 22 + static_cast<int>(i) * 11
+                       : frame.pointMenu     ? 24 + static_cast<int>(i) * 14
                        : frame.selected >= 0 ? 28 + static_cast<int>(i) * 16
                                              : 22 + static_cast<int>(i) * 11;
         if (selected) {
-            elements_slightly_rounded_box(canvas, 1, y - 10, 125, 14);
+            elements_slightly_rounded_box(canvas, 1, y - (frame.compact ? 9 : 10),
+                                          frame.compact ? 124 : 125, frame.compact ? 11 : 14);
             canvas_set_color(canvas, ColorWhite);
         }
-        canvas_draw_str(canvas, 5, y, frame.rows[i].left);
-        canvas_draw_str(canvas, frame.column, y, frame.rows[i].right);
+        if (frame.compact) {
+            char clipped[sizeof(Row::left)];
+            snprintf(clipped, sizeof(clipped), "%s", frame.rows[i].left);
+            const auto rightWidth = canvas_string_width(canvas, frame.rows[i].right);
+            const auto rightX = 121 - rightWidth;
+            const auto limit = rightWidth == 0 ? 118 : rightX - 9;
+            for (size_t length = strlen(clipped);
+                 length > 0 && canvas_string_width(canvas, clipped) > limit; --length) {
+                clipped[length - 1] = '\0';
+            }
+            canvas_draw_str(canvas, 5, y, clipped);
+            if (rightWidth != 0) {
+                canvas_draw_str(canvas, rightX, y, frame.rows[i].right);
+            }
+        } else {
+            canvas_draw_str(canvas, 5, y, frame.rows[i].left);
+            canvas_draw_str(canvas, frame.column, y, frame.rows[i].right);
+        }
         canvas_set_color(canvas, ColorBlack);
     }
     if (frame.hint[0] != '\0') {
@@ -546,7 +732,18 @@ void draw(Canvas* canvas, void* model) {
             elements_button_center(canvas, label);
         }
     }
-    if (frame.fileLink) {
+    if (frame.scrollUp) {
+        canvas_draw_str(canvas, 123, 25, "^");
+    }
+    if (frame.scrollDown) {
+        canvas_draw_str(canvas, 123, 49, "v");
+    }
+    if (frame.leftKey[0] != '\0') {
+        elements_button_left(canvas, frame.leftKey);
+    }
+    if (frame.rightKey[0] != '\0') {
+        elements_button_right(canvas, frame.rightKey);
+    } else if (frame.fileLink) {
         elements_button_right(canvas, "File");
     }
 }
@@ -646,21 +843,69 @@ void savePoint(App& app, const session::Target* target) {
     }
     app.profile = updated;
     const auto rows =
-        updated.size() + static_cast<size_t>(updated.size() < session::Profile::capacity);
+        updated.size() + static_cast<size_t>(updated.size() < session::Profile::legacyCapacity);
     go(app, Page::points, app.point < rows ? app.point : rows - 1);
+}
+
+void enterNetworks(App& app) {
+    const auto count = app.networks.size();
+    if (count == 0) {
+        app.networkFocus = 0;
+    } else if (app.networkFocus >= count) {
+        app.networkFocus = count - 1;
+    }
+    go(app, Page::networks, app.networkFocus);
+}
+
+void scan(App& app, uint32_t now) {
+    if (app.page != Page::scan) {
+        app.scanOrigin = app.page;
+        app.scanOriginFocus = app.focus;
+    }
+    app.scanStarted = app.client.scan(now);
+    app.scanCancel = false;
+    go(app, Page::scan);
+}
+
+void leaveScan(App& app) {
+    app.scanStarted = false;
+    if (app.scanOrigin == Page::networks) {
+        enterNetworks(app);
+    } else {
+        go(app, Page::home, app.scanOriginFocus);
+    }
+}
+
+void startCapture(App& app, const session::Profile& profile, uint32_t now) {
+    if (!app.client.start(profile, now)) {
+        return;
+    }
+    app.submitted = profile;
+    app.submittedId = {app.client.visitId().boot, app.client.visitId().session + 1U};
+    if (app.page == Page::networks) {
+        app.networkRun = app.submittedId;
+        app.networkLogFailed = false;
+    }
+    app.restarted = false;
+    app.acknowledgedStop = {};
+    go(app, Page::status);
 }
 
 void perform(App& app, const Binding& binding) {
     const uint32_t now = furi_get_tick();
     switch (binding.action) {
+    case Action::scan:
+        scan(app, now);
+        break;
+    case Action::selectNetwork:
+        app.selectionLimit = !app.networks.toggle(binding.index);
+        break;
+    case Action::placeholder:
+        app.placeholder = binding.index;
+        go(app, Page::placeholder);
+        break;
     case Action::start:
-        if (app.client.start(app.profile, now)) {
-            app.submitted = app.profile;
-            app.submittedId = {binding.visit.boot, binding.visit.session + 1U};
-            app.restarted = false;
-            app.acknowledgedStop = {};
-            go(app, Page::status);
-        }
+        startCapture(app, app.profile, now);
         break;
     case Action::stop:
         app.client.stop(binding.visit, now);
@@ -743,13 +988,34 @@ bool input(InputEvent* event, void* context) {
         if (frame.selected >= 0) {
             app.opening = false;
             app.held = {};
-            const size_t count = frame.pointMenu ? 2U : frame.count;
-            app.focus = (app.focus + (event->key == InputKeyDown ? 1U : count - 1U)) % count;
+            size_t count = frame.pointMenu ? 2U : frame.count;
+            if (app.page == Page::networks) {
+                count = app.networks.size();
+            } else if (app.page == Page::results) {
+                count = flipper::reportSize(app.selectedReport);
+            }
+            if (count != 0) {
+                app.focus = (app.focus + (event->key == InputKeyDown ? 1U : count - 1U)) % count;
+            }
+            if (app.page == Page::networks) {
+                app.networkFocus = app.focus;
+                app.selectionLimit = false;
+            }
             paint(app);
             return true;
         }
     }
     if (event->key == InputKeyLeft || event->key == InputKeyRight) {
+        if (app.page == Page::networks && event->type == InputTypeShort) {
+            app.held = {};
+            const uint32_t now = furi_get_tick();
+            if (event->key == InputKeyLeft) {
+                scan(app, now);
+            } else {
+                startCapture(app, app.networks.selection(), now);
+            }
+            return true;
+        }
         if (app.page == Page::channel) {
             app.held = {};
             const unsigned channel = app.draft.channel;
@@ -773,6 +1039,19 @@ bool back(void* context) {
     switch (app.page) {
     case Page::home:
         return false;
+    case Page::scan:
+        if (app.scanStarted && app.client.cancelScan(furi_get_tick())) {
+            app.scanCancel = true;
+        } else {
+            leaveScan(app);
+        }
+        break;
+    case Page::placeholder:
+        go(app, Page::home, app.placeholder);
+        break;
+    case Page::networks:
+        go(app, Page::home);
+        break;
     case Page::point:
         go(app, Page::points, app.point);
         break;
@@ -795,8 +1074,18 @@ bool back(void* context) {
         go(app, Page::detail);
         break;
     case Page::status:
-        app.restarted = false;
-        go(app, Page::home);
+        if (app.networkRun.session != 0) {
+            if (flipper::sessionBusy(app.client.state()) || unconfirmedStart(app)) {
+                return true;
+            }
+            enterNetworks(app);
+        } else if (app.client.supportsScan() && app.networks.scanned() &&
+                   !flipper::sessionBusy(app.client.state())) {
+            enterNetworks(app);
+        } else {
+            app.restarted = false;
+            go(app, Page::home);
+        }
         break;
     default:
         go(app, Page::home);
@@ -825,6 +1114,7 @@ void updateRun(App& app, bool wasBusy) {
         app.submittedId = {};
         app.legacyTargetId = {};
         app.acknowledgedStop = {};
+        app.networkRun = {};
     }
     if (report.id.session != 0) {
         app.restarted = false;
@@ -833,6 +1123,28 @@ void updateRun(App& app, bool wasBusy) {
     app.submittedId = {};
     if (report.id.session != 0 && !flipper::sessionBusy(report.state)) {
         app.latest = report;
+    }
+    // A terminal Stop acknowledgment can arrive before the detailed status reply.
+    const bool waitingForStopDetail = report.state == State::stopped &&
+                                      app.client.supportsRoundDetail() &&
+                                      report.round.interruption == uart::VisitInterruption::unknown;
+    if (app.networkRun.session != 0 && report.id.matches(app.networkRun) &&
+        report.round.profile.matches(app.submitted) && !waitingForStopDetail) {
+        const auto missed = app.networks.record(report.round, report.state);
+        if (!flipper::sessionBusy(report.state)) {
+            app.networkLogFailed = report.journal == uart::JournalState::failed;
+            app.networkRun = {};
+            if (report.state != State::stopped && missed < app.networks.size()) {
+                app.networkFocus = missed;
+            }
+            if (app.page == Page::status) {
+                enterNetworks(app);
+            }
+        }
+    }
+    if (app.networkRun.session != 0 && report.id.matches(app.networkRun) &&
+        !report.round.profile.matches(app.submitted)) {
+        app.networkRun = {};
     }
     if (app.opening) {
         app.opening = false;
@@ -858,7 +1170,7 @@ void tick(void* context) {
                 app.client.receive({bytes[i], now});
             }
         }
-        if (pending != Request::none && pending != Request::hello &&
+        if ((pending == Request::status || pending == Request::start || pending == Request::stop) &&
             app.client.pending() == Request::none && app.client.link() == Link::ready) {
             app.commandUnconfirmed = false;
             if (app.client.rejected() == Request::none) {
@@ -872,6 +1184,16 @@ void tick(void* context) {
                 }
             }
             updateRun(app, wasBusy);
+        }
+        if (app.page == Page::scan && app.scanStarted) {
+            if (app.client.scanState() == uart::ScanState::complete) {
+                app.networks.replace(app.client.scanResults());
+                app.scanStarted = false;
+                app.selectionLimit = false;
+                enterNetworks(app);
+            } else if (app.client.scanState() == uart::ScanState::idle) {
+                leaveScan(app);
+            }
         }
         app.client.poll(now);
         if ((pending == Request::start || pending == Request::stop) &&

@@ -5,7 +5,7 @@
 #include <iostream>
 #include <string>
 
-#include "../../firmware/esp32/uart/capture_path.h"
+#include "../../firmware/esp32/uart/session_journal.h"
 #include "passive_session.h"
 
 namespace {
@@ -39,7 +39,17 @@ std::array<uint8_t, 45> beacon(const Target& target) {
 
 class Visit final : public VisitBackend {
 public:
-    explicit Visit(const char* directory) : directory_(directory) {}
+    explicit Visit(const char* directory, bool checkpoint = false)
+        : directory_(directory), checkpoint_(checkpoint) {}
+
+    void beginRound(const SessionReport& report) override {
+        if (checkpoint_) {
+            const VisitStatistics stats[session::Profile::capacity]{};
+            const bool written = writeSessionJournal(directory_.c_str(), report, stats,
+                                                     {"fixture", "unknown"}, JournalFile::open);
+            assert(written);
+        }
+    }
 
     uint64_t nowUs() const override { return now_; }
 
@@ -111,6 +121,7 @@ public:
 
 private:
     std::string directory_;
+    bool checkpoint_;
     PassiveSession visit_;
     uint64_t now_ = 0;
     uint64_t startedUs_ = 0;
@@ -306,6 +317,44 @@ void checkSetupDeadline(const char* directory) {
     assert(round.status().results[0] == Outcome::radio_error);
 }
 
+void checkInterruptedRound(const char* directory) {
+    session::Profile profile;
+    const bool valid = profile.add(first) && profile.add(quietSecond);
+    assert(valid);
+    const VisitId id{boot, 10};
+    Visit visit(directory, true);
+    {
+        PassiveRound round(visit);
+        const bool started = round.start(id, profile);
+        assert(started);
+        visit.receive(first);
+        visit.expire();
+        round.poll();
+        checkActive(round, visit, 1);
+        assert(round.status().results[0] == Outcome::saved);
+    }
+    checkFile(visit.path({id, 1}), first);
+    const auto unobserved = visit.path({id, 2});
+    assert(storage::recoverPcap(unobserved.c_str()) == storage::CaptureState::missing);
+    char final[512];
+    const bool hasPath = sessionJournalPath(final, sizeof(final), directory, id);
+    assert(hasPath);
+    const auto checkpoint = std::string(final) + ".open";
+    std::ifstream input(checkpoint);
+    assert(input);
+    std::string line;
+    std::getline(input, line);
+    std::getline(input, line);
+    std::getline(input, line);
+    assert(line == "boot=123456789abcdef0 session=0000000a state=running outcome=none points=2");
+    std::getline(input, line);
+    std::getline(input, line);
+    assert(line.find("point=1 bssid=020000000001 channel=6 outcome=none ") == 0);
+    std::getline(input, line);
+    assert(line.find("point=2 bssid=020000000002 channel=6 outcome=none ") == 0);
+    assert(storage::SdFile::probe(final) == storage::FilePresence::missing);
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -317,6 +366,7 @@ int main(int argc, char** argv) try {
     checkRoundDeadline(argv[1], true);
     checkRoundDeadline(argv[1], false);
     checkSetupDeadline(argv[1]);
+    checkInterruptedRound(argv[1]);
     std::cout << "Passive round: visit order, extensions, and round deadline passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

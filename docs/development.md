@@ -20,9 +20,8 @@ We checked these tools on Apple Silicon on November 18, 2026. The
 
 ## Build status
 
-Both toolchains produce test artifacts. Builds of the working components and
-compatibility with the firmware on the bench still need checking. Record Mac
-and hardware results separately.
+Both toolchains produce artifacts. [T9](t9.md#beacons-build-microsd-verification)
+records the beacon build tested on the bench and the card verification.
 
 ## Automated quality checks
 

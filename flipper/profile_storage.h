@@ -20,6 +20,9 @@ public:
     }
 
     ProfileSave save(const session::Profile& expected, const session::Profile& profile) const {
+        if (profile.size() > session::Profile::legacyCapacity) {
+            return ProfileSave::unavailable;
+        }
         // Recheck both files. The card may have returned since the app opened.
         const Slot slots[]{read(0), read(1)};
         if (!slots[0].readable || !slots[1].readable) {

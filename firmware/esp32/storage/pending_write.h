@@ -45,5 +45,15 @@ WriteStatus writePending(File& file, const uint8_t* bytes, size_t size, size_t& 
     return accepted == size ? WriteStatus::complete : WriteStatus::partial;
 }
 
+// For a synchronous metadata write, retry only while the file accepts bytes without an error.
+template <typename File> bool writeAll(File& file, const uint8_t* bytes, size_t size) {
+    size_t accepted = 0;
+    WriteStatus status;
+    do {
+        status = writePending(file, bytes, size, accepted);
+    } while (status == WriteStatus::partial && file.lastError() == 0);
+    return status == WriteStatus::complete && file.lastError() == 0;
+}
+
 } // namespace storage
 } // namespace airrounds

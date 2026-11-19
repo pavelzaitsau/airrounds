@@ -75,6 +75,8 @@ public:
     // Only the consumer reads this count.
     uint64_t bytesWritten() const { return bytesWritten_; }
 
+    uint64_t bytesAccepted() const { return bytesWritten_ + accepted_; }
+
     uint32_t overflowCount() const { return overflowCount_.load(std::memory_order_relaxed); }
 
 private:

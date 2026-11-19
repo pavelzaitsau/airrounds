@@ -82,7 +82,10 @@ def tests(mode):
                 run([sys.executable, ROOT / "tools/mac/check_pcap.py", capture,
                      "--receipt", Path(temporary) / (filename + ".ok"), *options])
     if mode == "test":
-        run([sys.executable, "-m", "unittest", "tests.mac.test_check_pcap"])
+        run([sys.executable, "-m", "unittest", "tests.mac.test_check_pcap",
+             "tests.mac.test_embedded_metadata"])
+        run([sys.executable, ROOT / "tests/flipper/run_ui_emulator.py"],
+            env=dict(environment, CXX=tool("clang++")))
 
 
 def formatting(fix=False):

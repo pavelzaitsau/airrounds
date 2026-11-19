@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile the ESP32 examples and the Flipper app, without flashing devices."""
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -36,6 +37,30 @@ def verify_image(path, environment):
             raise SystemExit(f"Image failed {field} verification: {path}")
 
 
+def firmware_metadata(environment):
+    revision = environment.get("AIRROUNDS_REVISION")
+    if revision is None:
+        revision = "unknown"
+        if (ROOT / ".git").exists():
+            result = subprocess.run(["git", "rev-parse", "--show-toplevel", "HEAD"], cwd=ROOT,
+                                    capture_output=True, text=True, timeout=10)
+            lines = result.stdout.splitlines()
+            if result.returncode == 0 and len(lines) == 2 and Path(lines[0]).resolve() == ROOT:
+                revision = lines[1]
+    if not re.fullmatch(r"[0-9a-f]{40}|unknown", revision):
+        raise SystemExit("AIRROUNDS_REVISION must be a full Git revision or unknown")
+    fingerprint = hashlib.sha256()
+    sources = ROOT / "firmware/esp32"
+    for path in sorted(sources.rglob("*")):
+        if path.suffix in (".h", ".ino") and path.is_file():
+            fingerprint.update(path.relative_to(sources).as_posix().encode() + b"\0")
+            fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
+    build = fingerprint.hexdigest()[:16]
+    print(f"AirRounds source build ID {build}, revision {revision}", flush=True)
+    return ["--build-property",
+            f"compiler.cpp.extra_flags=-DAIRROUNDS_BUILD_ID={build} -DAIRROUNDS_REVISION={revision}"]
+
+
 def main():
     cli = ESP / "bin/arduino-cli"
     ufbt = FLIPPER / "venv/bin/ufbt"
@@ -66,7 +91,7 @@ def main():
             fqbn += ":CDCOnBoot=cdc"
             libraries += ["--library", ROOT / "firmware/esp32/session"]
         if name == "airrounds_uart":
-            libraries += ["--library", ROOT / "firmware/esp32/uart"]
+            libraries += ["--library", ROOT / "firmware/esp32/uart", *firmware_metadata(environment)]
         run([cli, "compile", "--fqbn", fqbn, *libraries,
              "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
              "--build-property", "tools.esptool_py.cmd=esptool.py",

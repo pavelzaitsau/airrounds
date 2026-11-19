@@ -20,6 +20,21 @@ struct RoundBudget {
     }
 };
 
+struct SessionReport {
+    SessionReport() = default;
+    SessionReport(const VisitId& visit, const RoundStatus& results, const RoundBudget& timeBudget,
+                  uint64_t ended, State finalState, Outcome finalOutcome)
+        : id(visit), status(results), budget(timeBudget), endedUs(ended), state(finalState),
+          outcome(finalOutcome) {}
+
+    VisitId id{};
+    RoundStatus status{};
+    RoundBudget budget{};
+    uint64_t endedUs = 0;
+    State state = State::idle;
+    Outcome outcome = Outcome::none;
+};
+
 struct VisitBudget {
     RoundBudget round;
     size_t remainingVisits;
@@ -37,11 +52,16 @@ class VisitBackend {
 public:
     virtual ~VisitBackend() = default;
     virtual uint64_t nowUs() const = 0;
+    virtual void beginRound(const SessionReport&) {}
     virtual VisitStart start(const session::Target& target, const VisitBudget& budget) = 0;
     virtual bool observationDone() const = 0;
     virtual bool stopReception() = 0;
     virtual void beginSave(const CaptureId& id) = 0;
     virtual Outcome saveResult() const = 0;
+    virtual void beginJournal(const SessionReport&) {}
+    virtual bool journalPending() const { return false; }
+    virtual bool supportsJournal() const { return false; }
+    virtual JournalState journalState() const { return JournalState::none; }
 };
 
 class PassiveRound {
@@ -55,28 +75,45 @@ public:
         id_ = id;
         status_ = {};
         status_.profile = profile;
+        status_.interruption = VisitInterruption::no;
         current_ = 0;
         stopRequested_ = false;
+        observationInterrupted_ = false;
         anySaved_ = false;
         budget_ = {visit_.nowUs(), profile.size() * visitBudgetUs};
-        startCurrent();
+        state_ = State::running;
+        outcome_ = Outcome::none;
+        preparing_ = true;
+        visit_.beginRound({id_, status_, budget_, budget_.startedUs, state_, outcome_});
+        advancePreparation();
         return true;
     }
 
     void stop() {
+        if (terminalState_ != State::idle) {
+            return;
+        }
         if (state_ == State::running ||
             (state_ == State::finalizing && current_ + 1 < status_.profile.size())) {
             // A stop during a save keeps the current file and skips later visits.
             stopRequested_ = true;
         }
         if (state_ == State::running) {
-            endObservation();
+            observationInterrupted_ = preparing_ || (budget_.remainingAt(visit_.nowUs()) != 0 &&
+                                                     !visit_.observationDone());
+            if (!preparing_) {
+                endObservation();
+            }
         }
     }
 
     void poll() {
-        if (state_ == State::running &&
-            (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone())) {
+        if (preparing_) {
+            advancePreparation();
+        } else if (terminalState_ != State::idle) {
+            updateJournal();
+        } else if (state_ == State::running &&
+                   (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone())) {
             endObservation();
         } else if (state_ == State::finalizing) {
             updateSaveResult();
@@ -86,10 +123,26 @@ public:
     State state() const { return state_; }
     Outcome outcome() const { return outcome_; }
     const RoundStatus& status() const { return status_; }
+    bool supportsJournal() const { return visit_.supportsJournal(); }
+    JournalState journalState() const { return visit_.journalState(); }
 
 private:
     // Allow up to 7 seconds for listening plus time for radio setup and storage.
     static constexpr uint64_t visitBudgetUs = 10000000;
+
+    void advancePreparation() {
+        if (visit_.journalPending()) {
+            return;
+        }
+        preparing_ = false;
+        if (stopRequested_) {
+            finish(State::stopped, Outcome::not_observed);
+        } else if (budget_.remainingAt(visit_.nowUs()) == 0) {
+            fail(Outcome::storage_error);
+        } else {
+            startCurrent();
+        }
+    }
 
     void startCurrent() {
         const auto remainingVisits = status_.profile.size() - current_;
@@ -112,15 +165,39 @@ private:
         }
     }
 
-    void finish(State finalState) {
-        state_ = finalState;
-        outcome_ = anySaved_ ? Outcome::saved : Outcome::not_observed;
+    void fail(Outcome result) { finish(State::error, result); }
+
+    void finish(State finalState, Outcome point = Outcome::none) {
+        const auto result = anySaved_ ? Outcome::saved : Outcome::not_observed;
+        const auto finalOutcome = finalState == State::error ? point : result;
+        SessionReport report{id_, status_, budget_, visit_.nowUs(), finalState, finalOutcome};
+        if (point != Outcome::none) {
+            report.status.results[current_] = point;
+        }
+        terminalState_ = finalState;
+        terminalOutcome_ = finalOutcome;
+        terminalPoint_ = point;
+        state_ = State::finalizing;
+        outcome_ = Outcome::none;
+        visit_.beginJournal(report);
+        updateJournal();
     }
 
-    void fail(Outcome result) {
-        status_.results[current_] = result;
-        state_ = State::error;
-        outcome_ = result;
+    void updateJournal() {
+        if (visit_.journalPending()) {
+            return;
+        }
+        // Keep the last point pending while the wire reports finalizing.
+        if (terminalPoint_ != Outcome::none) {
+            status_.results[current_] = terminalPoint_;
+        }
+        if (terminalState_ == State::stopped && terminalPoint_ == Outcome::not_observed &&
+            observationInterrupted_) {
+            status_.interruption = VisitInterruption::yes;
+        }
+        state_ = terminalState_;
+        outcome_ = terminalOutcome_;
+        terminalState_ = State::idle;
     }
 
     void endObservation() {
@@ -143,14 +220,14 @@ private:
             fail(result);
             return;
         }
-        status_.results[current_++] = result;
         anySaved_ = anySaved_ || result == Outcome::saved;
-        const bool moreVisits = current_ < status_.profile.size();
+        const bool moreVisits = current_ + 1 < status_.profile.size();
         if (!stopRequested_ && moreVisits && budget_.remainingAt(visit_.nowUs()) != 0) {
+            status_.results[current_++] = result;
             startCurrent();
             return;
         }
-        finish(stopRequested_ || moreVisits ? State::stopped : State::complete);
+        finish(stopRequested_ || moreVisits ? State::stopped : State::complete, result);
     }
 
     VisitBackend& visit_;
@@ -158,10 +235,15 @@ private:
     RoundBudget budget_{};
     RoundStatus status_;
     size_t current_ = 0;
+    bool preparing_ = false;
     bool stopRequested_ = false;
+    bool observationInterrupted_ = false;
     bool anySaved_ = false;
     State state_ = State::idle;
     Outcome outcome_ = Outcome::none;
+    State terminalState_ = State::idle;
+    Outcome terminalOutcome_ = Outcome::none;
+    Outcome terminalPoint_ = Outcome::none;
 };
 
 } // namespace uart

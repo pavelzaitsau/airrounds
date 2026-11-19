@@ -50,7 +50,8 @@ public:
 
 class Wire {
 public:
-    explicit Wire(uint64_t bootId = boot) : protocol(visit, bootId) {}
+    explicit Wire(uint64_t bootId = boot, ScanBackend* scan = nullptr)
+        : protocol(visit, bootId, scan) {}
 
     std::string send(const std::string& bytes) {
         std::string reply;
@@ -253,8 +254,139 @@ void roundRejectsInvalidProfiles() {
                .find("bad_target") != std::string::npos);
     assert(wire.command("0000000000000004 00000001 round 020000000001 06 020000000002 0b "
                         "020000000003 01 020000000004 0d")
-               .empty());
+               .find("bad_request") != std::string::npos);
     assert(wire.visit.starts == 0);
+}
+
+class TestScan final : public ScanBackend {
+public:
+    void startScan() override {
+        state = ScanState::running;
+        ++starts;
+    }
+    void pollScan() override {}
+    void stopScan() override { state = cleanupFails ? ScanState::error : ScanState::idle; }
+    ScanState scanState() const override { return state; }
+    const ScanList& scanList() const override { return list; }
+
+    ScanState state = ScanState::idle;
+    bool cleanupFails = false;
+    ScanList list;
+    unsigned starts = 0;
+};
+
+void scanContract() {
+    TestScan scan;
+    Wire wire(boot, &scan);
+    const char* start = "0000000000000001 00000000 scan";
+    assert(wire.command(start).find(" ok ") != std::string::npos);
+    assert(wire.command(start).find(" ok ") != std::string::npos && scan.starts == 1);
+    assert(wire.command("0000000000000002 00000001 start 020000000001 01").find(" busy ") !=
+           std::string::npos);
+    Target entry{{}, 6};
+    airrounds::session::setAddress(entry, 0x020000000005);
+    const uint8_t name[]{'S', 't', 'u', 'd', 'i', 'o'};
+    const bool added = scan.list.add(entry, name, sizeof(name));
+    const bool addedAgain = scan.list.add(entry, name, sizeof(name));
+    assert(added && !addedAgain);
+    scan.state = ScanState::complete;
+    const auto row = wire.command("8000000000000003 00000000 scan_read 0000000000000001 00");
+    Reply reply;
+    const bool decoded = readReply(row.c_str(), reply);
+    assert(decoded && reply.hasScan && reply.scan.count == 1);
+    assert(reply.scan.entry.nameSize == sizeof(name));
+    assert(memcmp(reply.scan.entry.name, name, sizeof(name)) == 0);
+    assert(wire.command("8000000000000004 00000000 scan_read 0000000000000001 01")
+               .find("bad_request") != std::string::npos);
+    assert(wire.command("8000000000000005 00000000 scan_read 0000000000000002 00")
+               .find("unknown_session") != std::string::npos);
+    assert(wire.command("0000000000000003 00000000 scan").find(" ok ") != std::string::npos);
+    assert(wire.command("0000000000000004 00000000 scan_stop 0000000000000003").find(" ok ") !=
+           std::string::npos);
+    assert(scan.state == ScanState::idle);
+}
+
+void scanCancelReportsCleanupError() {
+    TestScan scan;
+    scan.cleanupFails = true;
+    Wire wire(boot, &scan);
+    assert(wire.command("0000000000000001 00000000 scan").find(" ok ") != std::string::npos);
+    const char* stop = "0000000000000002 00000000 scan_stop 0000000000000001";
+    const auto failed = wire.command(stop);
+    Reply reply;
+    const bool decoded = readReply(failed.c_str(), reply);
+    assert(decoded && reply.code == Code::radio_error);
+    assert(wire.command(stop) == failed);
+    assert(scan.state == ScanState::error);
+}
+
+void roundDetailsDistinguishAnInterruption() {
+    TestScan scan;
+    Wire wire(boot, &scan);
+    assert(wire.command("0000000000000001 00000001 round 020000000001 01").find(" ok ") !=
+           std::string::npos);
+    wire.visit.done = true;
+    wire.visit.result = Outcome::not_observed;
+    Reply reply;
+    auto line = wire.command("0000000000000002 00000001 round_stop");
+    bool decoded = readReply(line.c_str(), reply);
+    assert(decoded && reply.state == State::stopped);
+    assert(reply.round.interruption == VisitInterruption::unknown);
+    line = wire.command("8000000000000003 00000001 round_status_detail");
+    decoded = readReply(line.c_str(), reply);
+    assert(decoded && reply.round.interruption == VisitInterruption::no);
+    assert(reply.round.results[0] == Outcome::not_observed);
+
+    assert(wire.command("0000000000000003 00000002 round 020000000001 01").find(" ok ") !=
+           std::string::npos);
+    wire.visit.result = Outcome::not_observed;
+    wire.command("0000000000000004 00000002 round_stop");
+    line = wire.command("8000000000000004 00000002 round_status_detail");
+    decoded = readReply(line.c_str(), reply);
+    assert(decoded && reply.round.interruption == VisitInterruption::yes);
+    assert(reply.state == State::stopped && reply.round.results[0] == Outcome::not_observed);
+    line = wire.command("8000000000000005 00000002 round_status");
+    decoded = readReply(line.c_str(), reply);
+    assert(decoded && reply.round.interruption == VisitInterruption::unknown);
+}
+
+void scanKeepsStrongerRows() {
+    ScanList list;
+    for (size_t index = 0; index < ScanList::capacity; ++index) {
+        const Target target{{2, 0, 0, 0, 0, static_cast<uint8_t>(index + 1)}, 1};
+        const bool added =
+            list.observe(target, static_cast<int8_t>(-90 + static_cast<int>(index)), nullptr, 0);
+        assert(added);
+    }
+    const Target weak{{2, 0, 0, 0, 0, 17}, 11};
+    const Target strong{{2, 0, 0, 0, 0, 18}, 11};
+    const bool keptWeak = list.observe(weak, -100, nullptr, 0);
+    const bool keptStrong = list.observe(strong, -35, nullptr, 0);
+    assert(!keptWeak && keptStrong && list.size() == ScanList::capacity);
+    assert(airrounds::session::sameAddress(list[0].target, strong));
+}
+
+void fivePointContract() {
+    TestScan scan;
+    Wire wire(boot, &scan);
+    const auto started =
+        wire.command("0000000000000001 00000001 round 020000000001 01 "
+                     "020000000002 06 020000000003 0b 020000000004 01 020000000005 06");
+    assert(started.find("020000000005060") != std::string::npos);
+    assert(wire.command("0000000000000002 00000000 scan").find("busy") != std::string::npos);
+    for (unsigned slot = 1; slot <= 5; ++slot) {
+        wire.visit.done = true;
+        wire.protocol.poll();
+        assert(wire.visit.saveId.slot == slot);
+        wire.visit.result = slot == 2 ? Outcome::not_observed : Outcome::saved;
+        wire.protocol.poll();
+    }
+    const auto finished = wire.command("8000000000000003 00000001 round_status");
+    Reply reply;
+    const bool decoded = readReply(finished.c_str(), reply);
+    assert(decoded && reply.state == State::complete);
+    assert(reply.round.profile.size() == 5 && reply.round.results[4] == Outcome::saved);
+    assert(reply.round.results[1] == Outcome::not_observed);
 }
 
 void roundCompletesEverySlot() {
@@ -388,9 +520,14 @@ int main() try {
     failures();
     roundRejectsInvalidProfiles();
     roundCompletesEverySlot();
+    scanContract();
+    scanCancelReportsCleanupError();
+    roundDetailsDistinguishAnInterruption();
+    scanKeepsStrongerRows();
+    fivePointContract();
     roundStopsOnStorageError();
     roundKeepsItsActiveVisit();
-    std::cout << "UART protocol: 12 groups passed\n";
+    std::cout << "UART protocol: 15 groups passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

@@ -21,6 +21,9 @@ inline bool editProfile(const session::Profile& current, size_t slot,
         return false;
     }
 
+    if (slot == current.size() && current.size() >= session::Profile::legacyCapacity) {
+        return false;
+    }
     session::Profile next;
     for (size_t index = 0; index < current.size(); ++index) {
         const auto* target = index == slot ? replacement : &current[index];
@@ -62,6 +65,9 @@ inline ProfileRecord encodeProfile(const session::Profile& profile, uint32_t gen
     ProfileRecord record{};
     memcpy(record.bytes, "ARP1", 4);
     putProfileWord(record.bytes + 4, generation);
+    if (profile.size() > session::Profile::legacyCapacity) {
+        return {};
+    }
     record.bytes[8] = static_cast<uint8_t>(profile.size());
     for (size_t index = 0; index < profile.size(); ++index) {
         auto* field = record.bytes + 9 + index * 7;
@@ -74,7 +80,7 @@ inline ProfileRecord encodeProfile(const session::Profile& profile, uint32_t gen
 
 inline StoredProfile decodeProfile(const ProfileRecord& record) {
     const size_t count = record.bytes[8];
-    if (memcmp(record.bytes, "ARP1", 4) != 0 || count > session::Profile::capacity ||
+    if (memcmp(record.bytes, "ARP1", 4) != 0 || count > session::Profile::legacyCapacity ||
         profileWord(record.bytes + sizeof(record.bytes) - 4) != profileChecksum(record)) {
         return {};
     }

@@ -1,7 +1,7 @@
 # AirRounds for Flipper Zero
 
 AirRounds controls passive Wi-Fi sessions on the ESP32-S2 Wi-Fi Devboard.
-Prepare the BSSID and 2.4 GHz channel of each approved access point.
+Scan for nearby 2.4 GHz networks and select the approved points to capture.
 
 ## Build and connect
 
@@ -13,11 +13,34 @@ Use the [AirRounds firmware and wiring guide][board] for the Devboard.
 Close the Flipper USB-to-UART Bridge before opening AirRounds. Keep
 the Devboard powered during a session.
 
-One point also works on the older AirRounds board firmware. Two or three
-points require board firmware that supports AirRounds rounds. **Board status**
-explains when the firmware needs an update.
+## Scan and run a round
 
-## Save a profile
+1. Open **Scan area**. Back cancels the scan. **Cancel failed** means the
+   board reported an error while shutting down the scan receiver.
+2. In **Beacons**, use Up and Down to move and OK to select one to five
+   points. Press Right on **Start** to begin. Left runs another scan.
+3. **Capture** shows the current network and how many points were captured.
+   Press OK on **Stop** to end the round. A save already in progress can finish.
+4. The app returns to **Beacons**. **Saved** identifies a verified beacon PCAP
+   and receipt. **Not seen** identifies a finished visit without a matching
+   beacon. Select that row to retry it. After Stop, unvisited rows stay selected.
+
+Each row shows a network name. Identical names receive a number, and the scan
+screen keeps BSSIDs and channels out of the interface. The list preserves
+matching selections and outcomes during rescans while AirRounds is open.
+
+**Flash board hardware**, **Test board**, and **About** are empty menu
+entries. Back returns to the menu.
+
+[Workflow and interactive mockup][scan-flow]
+
+The current `Saved` row confirms a beacon record.
+
+## Manual profiles on older boards
+
+Use both updated builds for Scan area and five points. An older board still
+uses the manual profile. Original single-visit boards can run one point.
+Boards with the original round capability can run up to three.
 
 1. Open **Set up points** or **Access points**.
 1. Choose **Add point** and enter the six BSSID bytes with the hex keyboard.
@@ -38,18 +61,19 @@ load it before making edits.
 1. Press OK on **Stop** to stop the session. **Stopping...** waits for the
    board. **Reception stopped** means reception ended and the board is
    still finishing the file. **Saving point** means later visits can follow.
-1. Open **Results** to see each point. Select a **Saved** point, then press
+1. Open **Results** to see each point. Select a **Captured** point, then press
    Right for its file name. Read the lines as one name at the root of the
    Devboard card.
 
-**Saved** means the board confirmed the closed file and its receipt.
+**Captured** means the board confirmed the closed file and its receipt.
 **Not seen** means the board found no matching beacon. **Stopped** means
 the stop left an unfinished point with no result. A card error or radio
-error has its own label.
+error has its own label. The session summary shows **Session log failed**
+when the Devboard reports a separate microSD journal failure.
 
 ## Recover a session
 
-Back leaves the status screen. Use **Session status** to return.
+In the manual flow, Back leaves the status screen. Use **Session status** to return.
 AirRounds opens a confirmed active session when the app starts.
 
 If UART drops, the board may finish the session on its own. Reconnect the
@@ -65,11 +89,12 @@ result available to the app, including after a board restart.
 Run `python3 tests/flipper/run_ui_emulator.py` from the repository root.
 The headless emulator runs the native app source with simulated Flipper
 services. It uses the AirRounds board protocol and scheduler with a fake
-receiver. The test covers setup and saving, profile reload, three-point
-review, Stop, lost UART, results, and older board firmware. It does not run
+receiver. It covers scan cancellation, five-point selection, Stop, retry,
+profile reload, UART recovery, and older board firmware. It does not run
 the ARM package or open a USB port.
 
 [sdk]: ../docs/t0.md#flipper-zero
 [board]: ../firmware/esp32/README.md
+[scan-flow]: ../docs/ui-ux/scan-flow.md
 [design]: ../docs/ui-ux/requirements.md
 [uart]: ../docs/uart.md

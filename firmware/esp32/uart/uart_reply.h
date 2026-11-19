@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../session/target.h"
+#include "scan.h"
 #include "uart_frame.h"
 
 namespace airrounds {
@@ -15,20 +16,31 @@ enum class Code {
     unknown_session,
     busy,
     conflict,
-    stale_request
+    stale_request,
+    radio_error
 };
 
 enum class State { idle, running, finalizing, complete, stopped, error };
 enum class Outcome { none = 0, not_observed = 1, saved = 2, radio_error = 3, storage_error = 4 };
 
-constexpr size_t wireReplyCapacity = 192;
+enum class JournalState { none, pending, saved, failed };
+enum class VisitInterruption { unknown, no, yes };
+constexpr uint8_t sessionJournalFeature = 0x04;
+constexpr uint8_t roundDetailFeature = 0x10;
+constexpr size_t wireReplyCapacity = 240;
 
 inline const char* wireName(Code code) {
-    static constexpr const char* names[]{
-        "ok",           "unsupported_version", "wrong_boot", "bad_request",
-        "bad_target",   "unknown_session",     "busy",       "conflict",
-        "stale_request"};
-    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(Code::stale_request) + 1,
+    static constexpr const char* names[]{"ok",
+                                         "unsupported_version",
+                                         "wrong_boot",
+                                         "bad_request",
+                                         "bad_target",
+                                         "unknown_session",
+                                         "busy",
+                                         "conflict",
+                                         "stale_request",
+                                         "radio_error"};
+    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(Code::radio_error) + 1,
                   "every code needs a wire name");
     return names[static_cast<size_t>(code)];
 }
@@ -48,6 +60,13 @@ inline const char* wireName(Outcome outcome) {
                       static_cast<size_t>(Outcome::storage_error) + 1,
                   "every outcome needs a wire name");
     return names[static_cast<size_t>(outcome)];
+}
+
+inline const char* wireName(JournalState state) {
+    static constexpr const char* names[]{"none", "pending", "saved", "failed"};
+    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(JournalState::failed) + 1,
+                  "every journal state needs a wire name");
+    return names[static_cast<size_t>(state)];
 }
 
 template <typename Word> bool readWireName(Field field, Word last, Word& value) {
@@ -73,6 +92,7 @@ struct VisitId {
 struct RoundStatus {
     session::Profile profile;
     Outcome results[session::Profile::capacity]{};
+    VisitInterruption interruption = VisitInterruption::unknown;
 
     // The first unfinished slot is the active one while the board is busy.
     size_t next() const {
@@ -94,12 +114,13 @@ struct Reply {
     uint8_t features = 0;
     bool hasRound = false;
     RoundStatus round;
+    bool hasJournal = false;
+    JournalState journal = JournalState::none;
+    bool hasScan = false;
+    ScanReply scan{};
 };
 
 inline bool readRound(Fields& fields, RoundStatus& round) {
-    if (!fields.take().is("aps")) {
-        return false;
-    }
     for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
          ++index) {
         const auto entry = fields.take();
@@ -126,6 +147,56 @@ inline bool readRound(Fields& fields, RoundStatus& round) {
     return fields.atEnd();
 }
 
+inline bool readScanReply(Fields& fields, ScanReply& scan) {
+    uint64_t count = 0;
+    uint64_t index = 0;
+    if (!readWireName(fields.take(), ScanState::error, scan.state) ||
+        !fields.take().hex(2, count) || !fields.take().hex(2, index) ||
+        count > ScanList::capacity) {
+        return false;
+    }
+    scan.count = static_cast<size_t>(count);
+    scan.index = static_cast<size_t>(index);
+    if (scan.state != ScanState::complete || scan.count == 0) {
+        return scan.count == 0 && scan.index == 0 && fields.atEnd();
+    }
+    return scan.index < scan.count && readScanEntry(fields, scan.entry);
+}
+
+inline bool readReplyDetails(Fields& fields, Reply& reply) {
+    if (fields.atEnd()) {
+        return true;
+    }
+    auto marker = fields.take();
+    if (marker.is("scan")) {
+        reply.hasScan = true;
+        return (reply.features & scanFeature) != 0 && readScanReply(fields, reply.scan);
+    }
+    if (marker.is("journal")) {
+        if ((reply.features & sessionJournalFeature) == 0 ||
+            !readWireName(fields.take(), JournalState::failed, reply.journal)) {
+            return false;
+        }
+        reply.hasJournal = true;
+        marker = fields.take();
+    }
+    if (marker.is("interrupted")) {
+        uint64_t interrupted = 0;
+        if ((reply.features & roundDetailFeature) == 0 || !fields.take().hex(1, interrupted) ||
+            interrupted > 1) {
+            return false;
+        }
+        reply.round.interruption =
+            interrupted == 1 ? VisitInterruption::yes : VisitInterruption::no;
+        marker = fields.take();
+    }
+    reply.hasRound = marker.is("aps");
+    return reply.hasRound && (reply.features & passiveRoundFeature) != 0 &&
+           readRound(fields, reply.round) &&
+           ((reply.features & scanFeature) != 0 ||
+            reply.round.profile.size() <= session::Profile::legacyCapacity);
+}
+
 // Pass one line including its line feed.
 inline bool readReply(const char* line, Reply& reply) {
     const char* marker = strrchr(line, '!');
@@ -146,7 +217,7 @@ inline bool readReply(const char* line, Reply& reply) {
     uint64_t featureBits = 0;
     Reply parsed;
     if (!parsed.envelope.read(fields) ||
-        !readWireName(fields.take(), Code::stale_request, parsed.code) ||
+        !readWireName(fields.take(), Code::radio_error, parsed.code) ||
         !fields.take().hex(8, session) ||
         !readWireName(fields.take(), State::error, parsed.state) ||
         !readWireName(fields.take(), Outcome::storage_error, parsed.outcome) ||
@@ -156,9 +227,7 @@ inline bool readReply(const char* line, Reply& reply) {
     }
     parsed.session = static_cast<uint32_t>(session);
     parsed.features = static_cast<uint8_t>(featureBits);
-    parsed.hasRound = !fields.atEnd();
-    if (parsed.hasRound &&
-        ((parsed.features & passiveRoundFeature) == 0 || !readRound(fields, parsed.round))) {
+    if (!readReplyDetails(fields, parsed)) {
         return false;
     }
     reply = parsed;

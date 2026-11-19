@@ -105,6 +105,8 @@ class CheckPcapTest(unittest.TestCase):
         options = ("--bssid", "02:00:00:00:00:01")
         output = self.check_file(header() + record(probe_response), "valid", *options, code=0)
         self.assertIn("SSID hex 4100ff", output)
+        directed_beacon = frame[:4] + client + frame[10:]
+        self.check_file(header() + record(directed_beacon), "not observed", *options, code=3)
         self.check_file(header() + record(), "not observed", "--bssid", "02:00:00:00:00:02",
                         code=3)
 

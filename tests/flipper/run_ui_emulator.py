@@ -3,18 +3,20 @@
 
 import os
 from pathlib import Path
-import shutil
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT / "tools/quality"))
+
+from check import ASAN_OPTIONS, tool  # noqa: E402
 
 
 def main():
-    cxx = os.environ.get("CXX") or shutil.which("clang++") or shutil.which("c++")
-    if not cxx:
-        raise SystemExit("Install clang++ or set CXX to a C++ compiler.")
+    # Apple clang has no LeakSanitizer on macOS; use the LLVM that the host gate uses.
+    cxx = tool("clang++")
     with tempfile.TemporaryDirectory(prefix="airrounds-ui-") as work:
         sdk = Path(work)
         for name in (
@@ -33,7 +35,9 @@ def main():
             str(ROOT / "flipper/airrounds.cpp"), str(HERE / "ui_emulator_test.cpp"),
             "-o", str(binary),
         ], check=True)
-        subprocess.run([str(binary)], check=True)
+        subprocess.run([str(binary)], check=True,
+                       env=dict(os.environ, ASAN_OPTIONS=ASAN_OPTIONS,
+                                UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"))
 
 
 if __name__ == "__main__":

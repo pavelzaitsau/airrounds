@@ -137,6 +137,71 @@ class CheckPcapTest(unittest.TestCase):
                 self.check_file(header() + record(fixed + elements), "not observed",
                                 *options, code=3)
 
+    def check_message(self, data, message, *options, code=1):
+        self.capture.write_bytes(data)
+        result = self.run_check(*options)
+        self.assertEqual((result.returncode, result.stderr.strip()), (code, message), result)
+
+    def test_exact_header_and_receipt_messages(self):
+        self.check_message(header(snaplen=0) + record(), "damaged: snapshot length is zero")
+        self.check_message(header(major=3) + record(), "unsupported: PCAP version 3.4")
+        self.check_message(header(minor=3) + record(), "unsupported: PCAP version 2.3")
+        data = samples()["valid"]
+        options = self.write_receipt(data)
+        receipt = self.receipt.read_bytes()
+        self.receipt.write_bytes(b"ARPCAP\x02\x00" + receipt[8:])
+        self.check_message(data, "damaged: receipt magic", *options)
+
+    def test_access_point_header_filters(self):
+        options = ("--bssid", "02:00:00:00:00:01")
+        other = bytes.fromhex("020000000002")
+        frames = {
+            "transmitter differs": BEACON[:10] + other + BEACON[16:],
+            "address 3 differs": BEACON[:16] + other + BEACON[22:],
+            "fragment number": BEACON[:22] + b"\x01" + BEACON[23:],
+        }
+        # To DS, From DS, More Fragments, Protected, and +HTC/Order change the frame layout.
+        for flag in (0x01, 0x02, 0x04, 0x40, 0x80):
+            frames[f"flags {flag:#04x}"] = BEACON[:1] + bytes([flag]) + BEACON[2:]
+        for name, frame in frames.items():
+            with self.subTest(name):
+                self.check_message(header() + record(frame), "not observed: BSSID 02:00:00:00:00:01",
+                                   *options, code=3)
+
+    def test_access_point_element_filters(self):
+        options = ("--bssid", "02:00:00:00:00:01")
+        fixed = BEACON[:36]
+        frames = {
+            "SSID longer than 32 bytes": fixed + b"\x00\x21" + b"A" * 33 + SUPPORTED_RATES,
+            "more than 8 rates": fixed + b"\x00\x01A\x01\x09" + bytes(9),
+            "one trailing byte": BEACON + b"\xdd",
+        }
+        for name, frame in frames.items():
+            with self.subTest(name):
+                self.check_message(header() + record(frame), "not observed: BSSID 02:00:00:00:00:01",
+                                   *options, code=3)
+        largest = fixed + b"\x00\x20" + b"A" * 32 + b"\x01\x08" + bytes(8)
+        output = self.check_file(header() + record(largest), "valid", *options, code=0)
+        self.assertIn("SSID hex " + "41" * 32, output)
+
+    def test_empty_last_element_is_complete(self):
+        output = self.check_file(header() + record(BEACON + b"\xdd\x00"), "valid",
+                                 "--bssid", "02:00:00:00:00:01", code=0)
+        self.assertIn("SSID hex 416972526f756e6473", output)
+
+    def test_receipt_is_named_only_when_checked(self):
+        data = samples()["valid"]
+        self.assertNotIn("receipt", self.check_file(data, "valid", code=0))
+        output = self.check_file(data, "valid", *self.write_receipt(data), code=0)
+        self.assertTrue(output.rstrip().endswith(", receipt matches"), output)
+
+    def test_first_visible_ssid_wins(self):
+        options = ("--bssid", "02:00:00:00:00:01")
+        hidden = record(BEACON[:36] + b"\x00\x00" + SUPPORTED_RATES)
+        renamed = record(BEACON[:36] + b"\x00\x01B" + SUPPORTED_RATES)
+        output = self.check_file(header() + record() + hidden + renamed, "valid", *options, code=0)
+        self.assertIn("SSID hex 416972526f756e6473", output)
+
     def test_snapshot_shortening_preserves_file_integrity(self):
         self.check_file(header(snaplen=32) + record(BEACON[:32], original=len(BEACON)),
                         "valid", code=0)

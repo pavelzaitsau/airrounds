@@ -6,13 +6,24 @@ This directory holds component and interface tests. See the
 The [toolchain examples](toolchain) check the cross-compilers and packaging.
 See the [T0 build commands](../docs/t0.md).
 
+## How the gate finds tests
+
+`make test` runs every test it finds and fails if any test file is out of reach:
+
+- Each `tests/<folder>/*_test.cpp` is a C++ host test. The exception is
+  `tests/flipper/ui_emulator_test.cpp`, which runs in the UI emulator.
+- Each `test_*.py` module runs through `unittest` discovery. Discovery only
+  enters folders with an `__init__.py`. The gate stops if a test module sits
+  in a folder without one.
+- Each `*.test.cjs` file under `docs/` or `tests/` runs with `node --test`.
+
 ## Mac PCAP checks
 
 `make test` runs the Mac checks and verifies a capture with a receipt from T2.
-Run the Mac tests on their own from the repository root.
+Run the Python tests on their own from the repository root.
 
 ```sh
-python3 -m unittest -v tests.mac.test_check_pcap
+python3 -m unittest discover -s tests -t . -p "test_*.py"
 ```
 
 See the [Mac tool guide](../tools/mac/README.md) for the T3 samples and
@@ -251,8 +262,9 @@ file writer. It supplies three BSSIDs on channel 6, then three on distinct
 channels. It checks that each saved PCAP contains the expected beacon and
 has a valid receipt. A third case moves the middle BSSID off its configured
 channel. That visit times out with no file, and the third point still saves.
-A quiet round ends when both visit windows expire. The Mac checker
-and `tcpdump` also read all eight saved test captures.
+A quiet round ends when both visit windows expire. The host test checks the
+eight saved captures with `recoverPcap`. The gate also runs the Mac checker
+and `tcpdump` on the captures from the PCAP and session tests.
 
 The UART and Flipper tests cover empty and duplicate profiles, a changed
 request order, replies from older firmware, and recovery after a lost reply.

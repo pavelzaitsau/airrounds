@@ -20,9 +20,9 @@ def record(frame=BEACON, *, order="<", fraction=123456, original=None):
     return struct.pack(order + "IIII", 1, fraction, len(frame), original) + frame
 
 
-def header(*, order="<", nano=False, link_type=105, snaplen=65535, minor=4):
+def header(*, order="<", nano=False, link_type=105, snaplen=65535, major=2, minor=4):
     magic = 0xA1B23C4D if nano else 0xA1B2C3D4
-    return struct.pack(order + "IHHIIII", magic, 2, minor, 0, 0, snaplen, link_type)
+    return struct.pack(order + "IHHIIII", magic, major, minor, 0, 0, snaplen, link_type)
 
 
 def samples():

@@ -184,3 +184,129 @@ test("results keep the point list even after editing the saved profile", () => {
     f.press("ok", "ok");
     assert.equal(f.screen().lines[1], "02:1A:2B:3C:4D:51");
 });
+
+// Presses a key until the screen reaches a state; a regression fails instead of hanging.
+function pressUntil(f, key, reached) {
+    for (let i = 0; i < 16 && !reached(f.screen()); i++) f.press(key);
+    assert.ok(reached(f.screen()), `pressing ${key} did not reach the expected key position`);
+}
+
+function editPoint(f, index) {
+    f.press("down", "ok");
+    for (let i = 0; i < index; i++) f.press("down");
+    f.press("ok");
+    if (f.title() !== "Enter BSSID") f.press("ok");
+    assert.equal(f.title(), "Enter BSSID");
+}
+
+// The Save key is the last column of the second keyboard row.
+function pressSaveKey(f) {
+    pressUntil(f, "down", (s) => s.hex.row === 1);
+    pressUntil(f, "left", (s) => s.hex.col === 8);
+    f.press("ok");
+}
+
+function typeNibble(f, cursor, column) {
+    pressUntil(f, "up", (s) => s.hex.row === -1);
+    pressUntil(f, "right", (s) => s.hex.cursor === cursor);
+    f.press("down");
+    pressUntil(f, "right", (s) => s.hex.col === column);
+    f.press("ok");
+}
+
+test("rejects a zero or group BSSID before the channel step", () => {
+    const f = fixture([{ address: "021A2B3C4D51", channel: 6 }]);
+    editPoint(f, 1);
+    assert.equal(f.screen().hex.address, "000000000000");
+    pressSaveKey(f);
+    assert.equal(f.title(), "Invalid BSSID");
+    typeNibble(f, 1, 1);
+    assert.equal(f.screen().hex.address, "010000000000");
+    pressSaveKey(f);
+    assert.equal(f.title(), "Invalid BSSID");
+    assert.equal(f.saved(), undefined);
+});
+
+test("rejects a BSSID that another point already uses", () => {
+    const f = fixture();
+    editPoint(f, 1);
+    typeNibble(f, 11, 1);
+    assert.equal(f.screen().hex.address, "021A2B3C4D51");
+    pressSaveKey(f);
+    assert.equal(f.title(), "Point already added");
+});
+
+test("backspace moves the cursor left and clears that digit", () => {
+    const f = fixture([]);
+    f.press("ok", "ok");
+    assert.equal(f.title(), "Enter BSSID");
+    f.press("right", "ok");
+    assert.deepEqual([f.screen().hex.address, f.screen().hex.cursor], ["100000000000", 1]);
+    pressUntil(f, "left", (s) => s.hex.col === 8);
+    f.press("ok");
+    assert.deepEqual([f.screen().hex.address, f.screen().hex.cursor], ["000000000000", 0]);
+});
+
+test("the channel wraps between 1 and 13", () => {
+    const f = fixture();
+    editPoint(f, 0);
+    pressSaveKey(f);
+    assert.equal(f.title(), "Select channel");
+    for (let i = 0; i < 6; i++) f.press("left");
+    assert.equal(f.screen().lines[1], "< Channel 13 >");
+    f.press("right");
+    assert.equal(f.screen().lines[1], "< Channel 1 >");
+});
+
+test("a failed profile save keeps the channel screen and reports it", () => {
+    let fail = true;
+    const app = createPrototype({
+        saveProfile() { if (fail) throw new Error("card"); },
+    });
+    const f = { press: (...keys) => keys.forEach((key) => { app.press(key); app.release(key); }),
+        title: () => app.screen().title, screen: () => app.screen() };
+    editPoint(f, 0);
+    pressSaveKey(f);
+    f.press("ok");
+    assert.equal(f.title(), "Profile not saved");
+    fail = false;
+    f.press("ok");
+    assert.equal(f.title(), "Access points");
+});
+
+test("Last result opens the finished session and reset clears it", () => {
+    const f = fixture();
+    f.press("down", "down", "ok");
+    assert.equal(f.title(), "No result available");
+    f.press("back");
+    start(f);
+    for (let i = 0; i < 6; i++) f.step();
+    f.press("back", "down", "down", "ok");
+    assert.deepEqual(f.screen().lines, ["1 of 3 saved"]);
+    f.press("ok");
+    assert.equal(f.title(), "Results");
+    assert.equal(f.app.reset(true), true);
+    f.press("down", "down", "ok");
+    assert.equal(f.title(), "No result available");
+});
+
+test("the board panel names the next event in each phase", () => {
+    const f = fixture();
+    const next = () => f.app.board().next;
+    assert.equal(next(), "");
+    f.press("ok", "ok");
+    assert.equal(next(), "Acknowledge Start");
+    f.step();
+    assert.equal(next(), "Finish point observation");
+    f.step();
+    assert.equal(next(), "Publish point result");
+    f.press("ok");
+    assert.equal(next(), "Acknowledge Stop");
+    f.step();
+    assert.equal(next(), "Finish saving");
+    f.step();
+    assert.equal(next(), "");
+    f.link();
+    f.link();
+    assert.equal(next(), "Read current session");
+});

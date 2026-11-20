@@ -1,6 +1,7 @@
 # Scan and capture on Flipper
 
-This page describes the current beacon workflow.
+This page describes the current beacon workflow. Phase T10 adds a capture-mode
+choice on top of it; see [Capture modes](capture-modes.md).
 
 ## Workflow
 
@@ -12,7 +13,7 @@ This page describes the current beacon workflow.
 
 The recent Devboard presents this flow as its default. Flipper uses the network name in the scan list and progress view. Distinct access points with the same name receive numbered labels. Hidden names receive a fallback label. BSSIDs and channels are internal to the scan, verified PCAPs, and session journals. Existing manual profiles remain readable for older board firmware.
 
-**Flash board hardware**, **Test board**, and **About** are empty screens in this change. Back returns to the menu.
+**Capture mode** chooses the mode of the next round; see [Capture modes](capture-modes.md). **Flash board hardware**, **Test board**, and **About** are empty screens in this change. Back returns to the menu.
 
 ## Mockup
 
@@ -20,8 +21,7 @@ Open [Scan and capture on Flipper](scan-prototype.html) in a browser. Choose
 TELEPORT and Studio, stop after the first capture, then add Guest. Use the
 simulator's **Сымитировать «не найдена»** control to try a miss followed
 by a retry. The screen is 128 × 64 and supports mouse and keyboard input.
-The demo uses the earlier `Networks` and `Captured` labels. The device
-uses `Beacons` and `Saved`.
+The demo list uses the device labels `Beacons` and `Saved`.
 
 ## Interfaces and verification
 

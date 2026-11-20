@@ -34,6 +34,7 @@ enum class Page {
     home,
     scan,
     networks,
+    captureMode,
     placeholder,
     points,
     point,
@@ -53,6 +54,8 @@ enum class Action : uint8_t {
     none,
     scan,
     selectNetwork,
+    captureMode,
+    chooseMode,
     placeholder,
     board,
     start,
@@ -101,6 +104,8 @@ struct Frame {
     bool compact = false;
     bool scrollUp = false;
     bool scrollDown = false;
+    // Four compact rows leave no gap at y = 49, so the menu draws its mark below the last row.
+    int scrollDownY = 49;
     bool fileLink = false;
     Binding binding{};
 
@@ -118,9 +123,9 @@ struct Frame {
                selected == other.selected && column == other.column &&
                pointMenu == other.pointMenu && compact == other.compact &&
                scrollUp == other.scrollUp && scrollDown == other.scrollDown &&
-               fileLink == other.fileLink && strcmp(titleRight, other.titleRight) == 0 &&
-               strcmp(leftKey, other.leftKey) == 0 && strcmp(rightKey, other.rightKey) == 0 &&
-               binding.matches(other.binding);
+               scrollDownY == other.scrollDownY && fileLink == other.fileLink &&
+               strcmp(titleRight, other.titleRight) == 0 && strcmp(leftKey, other.leftKey) == 0 &&
+               strcmp(rightKey, other.rightKey) == 0 && binding.matches(other.binding);
     }
 };
 
@@ -153,6 +158,9 @@ struct App {
     VisitId networkRun{};
     size_t networkFocus = 0;
     size_t placeholder = 0;
+    // The mode of the next Start. It lasts until the app closes; the next launch uses Beacon.
+    size_t captureMode = flipper::beaconModeIndex;
+    bool modeNotAvailable = false;
     Page scanOrigin = Page::home;
     size_t scanOriginFocus = 0;
     bool scanStarted = false;
@@ -227,10 +235,14 @@ void channelText(uint8_t channel, char (&text)[8]) {
 }
 
 constexpr size_t visibleNetworkRows = 3;
-constexpr const char* scanMenu[]{"Scan area", "Flash board hardware", "Test board", "About"};
+constexpr size_t visibleMenuRows = 4;
+constexpr const char* scanMenu[]{"Scan area", "Capture mode", "Flash board hardware", "Test board",
+                                 "About"};
+constexpr size_t scanMenuSize = sizeof(scanMenu) / sizeof(scanMenu[0]);
+constexpr size_t captureModeItem = 1;
 
-size_t topRow(size_t focus) {
-    return focus < visibleNetworkRows ? 0 : focus - visibleNetworkRows + 1;
+size_t topRow(size_t focus, size_t visible = visibleNetworkRows) {
+    return focus < visible ? 0 : focus - visible + 1;
 }
 
 void networkName(const App& app, const session::Target& target, size_t slot, char (&name)[25]) {
@@ -250,6 +262,18 @@ bool canStart(const App& app) {
 // whether the status screens call the board ready.
 bool readyToStart(const App& app) {
     return app.client.supportsScan() ? app.client.canStart(1) : canStart(app);
+}
+
+// A board without the capture-mode capability runs every round in Beacon mode, so the
+// labels of a running or finished round are Beacon labels until the board reports a mode.
+const flipper::CaptureModeInfo& roundMode(const App& /*app*/) {
+    return flipper::beaconMode();
+}
+
+// The board lists no capture modes until the reserved `modes` command exists, so only modes
+// that every board supports are available.
+flipper::BoardModes boardModes(const App& /*app*/) {
+    return {};
 }
 
 bool unconfirmedStart(const App& app) {
@@ -313,9 +337,10 @@ void showNetworkProgress(Frame& frame, const App& app) {
     const auto slot = report.round.next();
     const auto total = report.round.profile.size();
     title(frame, "Capture");
-    snprintf(frame.titleRight, sizeof(frame.titleRight), "Captured %u/%u",
-             flipper::savedPoints(report), static_cast<unsigned>(total));
-    frame.row(report.state == State::running ? "Listening" : "Saving");
+    const auto& mode = roundMode(app);
+    snprintf(frame.titleRight, sizeof(frame.titleRight), mode.counter, flipper::savedPoints(report),
+             static_cast<unsigned>(total));
+    frame.row(report.state == State::running ? mode.listening : mode.saving);
     if (slot < total) {
         char name[25];
         networkName(app, report.round.profile[slot], slot, name);
@@ -399,12 +424,17 @@ void showHome(Frame& frame, const App& app) {
     if (app.client.supportsScan()) {
         frame.compact = true;
         const bool busy = flipper::sessionBusy(app.client.state()) || unconfirmedStart(app);
-        for (size_t row = 0; row < sizeof(scanMenu) / sizeof(scanMenu[0]); ++row) {
+        const size_t first = topRow(app.focus, visibleMenuRows);
+        for (size_t row = first; row < scanMenuSize && row < first + visibleMenuRows; ++row) {
             frame.row(row == 0 && busy ? "Session status" : scanMenu[row]);
         }
-        frame.selected = static_cast<int>(app.focus);
-        const auto action =
-            app.focus == 0 ? (busy ? Action::status : Action::scan) : Action::placeholder;
+        frame.scrollUp = first > 0;
+        frame.scrollDown = first + visibleMenuRows < scanMenuSize;
+        frame.scrollDownY = 63;
+        frame.selected = static_cast<int>(app.focus - first);
+        const auto action = app.focus == 0                 ? (busy ? Action::status : Action::scan)
+                            : app.focus == captureModeItem ? Action::captureMode
+                                                           : Action::placeholder;
         frame.binding = {action, app.focus, {}};
         return;
     }
@@ -477,7 +507,8 @@ void showScan(Frame& frame, const App& app) {
 }
 
 void showNetworks(Frame& frame, const App& app) {
-    title(frame, "Beacons");
+    const auto& mode = roundMode(app);
+    title(frame, mode.listTitle);
     frame.compact = true;
     const auto count = app.networks.size();
     const auto selected = static_cast<uint8_t>(app.networks.selection().size());
@@ -505,10 +536,7 @@ void showNetworks(Frame& frame, const App& app) {
                              : app.networks.selected(row) ? "[x] "
                                                           : "[ ] ";
         snprintf(label, sizeof(label), "%s%.20s", marker, name);
-        const char* status = outcome == Outcome::none ? ""
-                             : outcome == Outcome::saved
-                                 ? "Saved"
-                                 : flipper::pointResult(outcome, State::complete);
+        const char* status = flipper::networkRowStatus(outcome, mode);
         frame.row(label, status);
     }
     if (app.selectionLimit) {
@@ -519,6 +547,39 @@ void showNetworks(Frame& frame, const App& app) {
         snprintf(frame.titleRight, sizeof(frame.titleRight), "Board offline");
     }
     frame.binding = {Action::selectNetwork, app.focus, {}};
+}
+
+const char* modeLock(const App& app) {
+    const auto& client = app.client;
+    flipper::ModeLockInput board;
+    board.uartOpen = app.serial != nullptr;
+    board.link = client.link();
+    board.pending = client.pending();
+    board.commandUnconfirmed = app.commandUnconfirmed;
+    board.session = client.state();
+    board.scan = client.scanState();
+    return flipper::captureModeLock(board);
+}
+
+void showCaptureMode(Frame& frame, const App& app) {
+    title(frame, "Capture mode");
+    frame.compact = true;
+    const auto board = boardModes(app);
+    for (size_t index = 0; index < flipper::captureModeCount; ++index) {
+        const auto& mode = flipper::captureModes[index];
+        char label[sizeof(Row::left)];
+        snprintf(label, sizeof(label), "%s%s", index == app.captureMode ? "* " : "", mode.name);
+        frame.row(label, flipper::modeAvailable(mode, board) ? "" : "Soon");
+    }
+    frame.selected = static_cast<int>(app.focus);
+    const char* hint = modeLock(app);
+    if (hint == nullptr && app.modeNotAvailable) {
+        hint = "Not available yet";
+    }
+    if (hint != nullptr) {
+        snprintf(frame.hint, sizeof(frame.hint), "%s", hint);
+    }
+    frame.binding = {Action::chooseMode, app.focus, {}};
 }
 
 Frame makeFrame(const App& app) {
@@ -532,6 +593,9 @@ Frame makeFrame(const App& app) {
         break;
     case Page::networks:
         showNetworks(frame, app);
+        break;
+    case Page::captureMode:
+        showCaptureMode(frame, app);
         break;
     case Page::placeholder:
         title(frame, scanMenu[app.placeholder]);
@@ -632,7 +696,7 @@ Frame makeFrame(const App& app) {
                 snprintf(name, sizeof(name), "Point %u", static_cast<unsigned>(i + 1));
             }
             frame.row(name, flipper::pointResult(flipper::pointOutcome(app.selectedReport, i),
-                                                 app.selectedReport.state));
+                                                 app.selectedReport.state, roundMode(app)));
         }
         frame.compact = app.client.supportsScan();
         frame.scrollUp = first > 0;
@@ -646,7 +710,7 @@ Frame makeFrame(const App& app) {
         pointText(app.resultPoint, name);
         title(frame, name);
         const auto outcome = flipper::pointOutcome(app.selectedReport, app.resultPoint);
-        frame.row(flipper::pointDetail(outcome, app.selectedReport.state));
+        frame.row(flipper::pointDetail(outcome, app.selectedReport.state, roundMode(app)));
         if (app.resultPoint < app.selectedReport.round.profile.size()) {
             const auto& target = app.selectedReport.round.profile[app.resultPoint];
             if (app.client.supportsScan()) {
@@ -744,7 +808,7 @@ void draw(Canvas* canvas, void* model) {
         canvas_draw_str(canvas, 123, 25, "^");
     }
     if (frame.scrollDown) {
-        canvas_draw_str(canvas, 123, 49, "v");
+        canvas_draw_str(canvas, 123, frame.scrollDownY, "v");
     }
     if (frame.leftKey[0] != '\0') {
         elements_button_left(canvas, frame.leftKey);
@@ -899,6 +963,22 @@ void startCapture(App& app, const session::Profile& profile, uint32_t now) {
     go(app, Page::status);
 }
 
+void chooseMode(App& app, size_t index) {
+    if (index >= flipper::captureModeCount || modeLock(app) != nullptr) {
+        return;
+    }
+    if (!flipper::modeAvailable(flipper::captureModes[index], boardModes(app))) {
+        app.modeNotAvailable = true;
+        return;
+    }
+    if (index != app.captureMode) {
+        // Results of another mode mean something else, so a change clears them.
+        app.captureMode = index;
+        app.networks.clearOutcomes();
+    }
+    go(app, Page::home, captureModeItem);
+}
+
 void perform(App& app, const Binding& binding) {
     const uint32_t now = furi_get_tick();
     switch (binding.action) {
@@ -907,6 +987,13 @@ void perform(App& app, const Binding& binding) {
         break;
     case Action::selectNetwork:
         app.selectionLimit = !app.networks.toggle(binding.index);
+        break;
+    case Action::captureMode:
+        app.modeNotAvailable = false;
+        go(app, Page::captureMode, app.captureMode);
+        break;
+    case Action::chooseMode:
+        chooseMode(app, binding.index);
         break;
     case Action::placeholder:
         app.placeholder = binding.index;
@@ -970,6 +1057,9 @@ void perform(App& app, const Binding& binding) {
 
 bool input(InputEvent* event, void* context) {
     auto& app = *static_cast<App*>(context);
+    if (app.page == Page::captureMode && event->type == InputTypePress) {
+        app.modeNotAvailable = false;
+    }
     if (event->key == InputKeyOk) {
         if (event->type == InputTypePress) {
             app.opening = false;
@@ -1001,6 +1091,8 @@ bool input(InputEvent* event, void* context) {
                 count = app.networks.size();
             } else if (app.page == Page::results) {
                 count = flipper::reportSize(app.selectedReport);
+            } else if (app.page == Page::home && app.client.supportsScan()) {
+                count = scanMenuSize;
             }
             if (count != 0) {
                 app.focus = (app.focus + (event->key == InputKeyDown ? 1U : count - 1U)) % count;
@@ -1053,6 +1145,9 @@ bool back(void* context) {
         } else {
             leaveScan(app);
         }
+        break;
+    case Page::captureMode:
+        go(app, Page::home, captureModeItem);
         break;
     case Page::placeholder:
         go(app, Page::home, app.placeholder);

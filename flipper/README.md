@@ -29,8 +29,10 @@ Each row shows a network name. Identical names receive a number, and the scan
 screen keeps BSSIDs and channels out of the interface. The list preserves
 matching selections and outcomes during rescans while AirRounds is open.
 
-**Flash board hardware**, **Test board**, and **About** are empty menu
-entries. Back returns to the menu.
+**Capture mode** chooses the mode of the next round. Beacon is the only
+available mode; **Todo A** and **Todo B** show **Soon**. See
+[Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware**,
+**Test board**, and **About** are empty menu entries. Back returns to the menu.
 
 [Workflow and interactive mockup][scan-flow]
 

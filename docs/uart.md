@@ -249,3 +249,25 @@ session and request IDs from the `hello` reply to choose the next IDs.
 
 See the [UART checks](../tests/README.md#uart-protocol) for the bench steps
 and results.
+
+## Reserved: capture modes
+
+This section reserves fields for capture modes. No board or client
+implements them yet. A board without feature bit 5 runs every round as
+Beacon, and the commands above keep their formats. The
+[capture modes design](capture-modes-design.md#protocol-reservation) explains
+why the mode travels only in new commands.
+
+| Item | Reservation |
+| --- | --- |
+| Feature bit 5 (`20`) | The board supports capture modes. One bit covers every mode. |
+| `modes` | Read command, scope zero, no arguments. The OK reply appends `modes <count> <id>...`, two hex digits each. Beacon is `00`. |
+| `mode <id>` | Optional tail at the end of `round`, only with bit 5. Without it, and for `start`, the round is Beacon. A retry of the same session with another mode returns `conflict`. |
+| `round_status_mode` | Read command with bit 5, like `round_status_detail`. It inserts `mode <id>` after the optional `journal` and `interrupted` fields, just before `aps`. |
+| Result digit `5` | `absence_confirmed`. It appears only in `round_status_mode` replies. |
+
+The existing round replies report a confirmed absence as `1`. Their overall
+result stays `saved` only when a point reports `2`. A client with bit 5
+reads the round with `round_status_mode`. In a non-Beacon round it takes the
+point results from that command only, because `round` and `round_stop`
+replies carry the older encoding.

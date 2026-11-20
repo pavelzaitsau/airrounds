@@ -5,11 +5,15 @@ import argparse
 import json
 import os
 from pathlib import Path
+import resource
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build" / "quality"
@@ -42,10 +46,168 @@ def tool(name):
     return found
 
 
+# Every command the gate starts runs under these limits. The kernel enforces them, so a test that
+# loops or writes without end dies even after the gate exits and leaves it orphaned.
+TIMEOUT_SECONDS = 180
+CPU_SECONDS = 300
+FILE_BYTES = 1 << 30
+# Every guard owns a directory; a guard started below another one puts its directory inside the
+# enclosing one. Each child creates a file named after its process group in its guard's directory
+# before it runs. A guard ending for any reason kills every group in its subtree, so a guard that
+# had to kill an inner guard still reaches the inner guard's children.
+GROUPS_ENV = "AIRROUNDS_GUARD_DIR"
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+KILL_ROUNDS = 20
+# A stopped command gets this long after SIGTERM to remove its temporary files.
+GRACE_SECONDS = 2
+
+
+def capped(limit, soft):
+    """Lower a limit to `soft`; never ask for more than the inherited hard limit allows."""
+    current_soft, hard = resource.getrlimit(limit)
+    if hard != resource.RLIM_INFINITY:
+        soft = min(soft, hard)
+    if current_soft != resource.RLIM_INFINITY:
+        soft = min(soft, current_soft)
+    resource.setrlimit(limit, (soft, hard))
+
+
+def limit_child():
+    capped(resource.RLIMIT_CPU, CPU_SECONDS)
+    capped(resource.RLIMIT_FSIZE, FILE_BYTES)
+
+
+class Stopped(BaseException):
+    """A stop signal arrived; the guard kills its children and the gate exits."""
+
+
+def stopper():
+    """A handler that raises once. CPython can run a second, already caught signal inside the
+    guard's cleanup; raising again there would cut the cleanup short."""
+    caught = []
+
+    def stop(number, _frame):
+        if not caught:
+            caught.append(number)
+            raise Stopped(number)
+
+    return stop
+
+
+def signal_groups(groups, number):
+    for group in groups:
+        try:
+            os.killpg(group, number)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def registered(directory):
+    """Every process group registered in a guard directory and the directories below it."""
+    groups = set()
+    for _root, _directories, files in os.walk(directory):
+        groups.update(int(name) for name in files if name.isdigit())
+    return groups
+
+
+def kill_subtree(directory):
+    """Kill every group in the subtree until no new group appears, then remove the subtree."""
+    killed = set()
+    for _ in range(KILL_ROUNDS):
+        groups = registered(directory)
+        if groups <= killed:
+            break
+        signal_groups(groups - killed, signal.SIGKILL)
+        killed |= groups
+        # A guard killed in the middle of a start leaves a child that registers a moment later.
+        time.sleep(0.05)
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+def start_child(directory, mask):
+    """Runs in the child before exec: register the new group, then apply the limits."""
+
+    def prepare():
+        # Creating the file fails once the guard has removed its directory, so a child that
+        # starts after its guard finished exits here instead of running unguarded.
+        descriptor = os.open(os.path.join(directory, str(os.getpid())),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        limit_child()
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+    return prepare
+
+
+def stop_process(process, stopped):
+    """End the command's own group: SIGTERM first when the gate is stopping, then SIGKILL."""
+    if stopped and process.poll() is None:
+        signal_groups([process.pid], signal.SIGTERM)
+        try:
+            process.wait(timeout=GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+    signal_groups([process.pid], signal.SIGKILL)
+    process.wait()
+
+
+def guarded(command, timeout=TIMEOUT_SECONDS, **kwargs):
+    """Run a command under the limits; on any exit, kill its process group and every group below."""
+    environment = kwargs.pop("env", None)
+    environment = dict(os.environ if environment is None else environment)
+    enclosing = os.environ.get(GROUPS_ENV)
+    main_thread = threading.current_thread() is threading.main_thread()
+    # Stop signals wait while the guard starts or cleans up, so a second signal cannot cut a
+    # cleanup short. They arrive only while the command runs.
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS) if main_thread else set()
+    handlers = {}
+    process = None
+    directory = None
+    stopped = False
+    try:
+        parent = enclosing if enclosing and os.path.isdir(enclosing) else None
+        directory = tempfile.mkdtemp(prefix="airrounds-guard-", dir=parent)
+        environment[GROUPS_ENV] = directory
+        if main_thread:
+            # A signal the caller ignores, as `nohup` ignores SIGHUP, stays ignored.
+            stop = stopper()
+            handlers = {number: signal.signal(number, stop) for number in STOP_SIGNALS
+                        if signal.getsignal(number) not in (signal.SIG_IGN, None)}
+        process = subprocess.Popen(command, cwd=ROOT, start_new_session=True,
+                                   preexec_fn=start_child(directory, mask), env=environment,
+                                   **kwargs)
+        if main_thread:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except BaseException:
+        stopped = True
+        raise
+    finally:
+        if main_thread:
+            signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+        # A finished command can leave background children; a stopped one leaves its whole tree.
+        if process is not None:
+            stop_process(process, stopped)
+            try:
+                os.unlink(os.path.join(directory, str(process.pid)))
+            except OSError:
+                pass
+        if directory:
+            kill_subtree(directory)
+        for number, handler in handlers.items():
+            signal.signal(number, handler)
+        if main_thread:
+            # A stop signal that waited now reaches the caller's own handler.
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+
 def run(command, **kwargs):
     command = [str(arg) for arg in command]
     print("+ " + shlex.join(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True, timeout=180, **kwargs)
+    result = guarded(command, **kwargs)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, command)
 
 
 ASAN_OPTIONS = "halt_on_error=1:detect_leaks=1"
@@ -59,8 +221,8 @@ def leak_canary(directory, flags, environment):
     source.write_text(LEAK_CANARY)
     run([tool("clang++"), *flags, source, "-o", binary])
     print("+ " + shlex.join([str(binary)]) + "  # expect a reported leak", flush=True)
-    result = subprocess.run([str(binary)], cwd=ROOT, env=environment, capture_output=True,
-                            text=True, timeout=60, check=False)
+    result = guarded([str(binary)], timeout=60, env=environment, stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, text=True)
     if result.returncode == 0 or "LeakSanitizer: detected memory leaks" not in result.stderr:
         raise SystemExit("LeakSanitizer did not report the canary leak; see docs/quality.md")
 
@@ -196,3 +358,5 @@ if __name__ == "__main__":
         raise SystemExit(error.returncode) from None
     except subprocess.TimeoutExpired as error:
         raise SystemExit(f"Check timed out: {error.cmd}") from None
+    except Stopped as error:
+        raise SystemExit(128 + error.args[0]) from None

@@ -15,7 +15,8 @@ microSD. Use a Mac to check the files after transfer.
 
 T0 starts with the source revisions and build tools. See the
 [development plan](docs/plan.md), [component map](docs/architecture.md), and
-[tool setup](docs/development.md). See the [scan workflow and mockup](docs/ui-ux/scan-flow.md).
+[tool setup](docs/development.md). See the [scan workflow and mockup](docs/ui-ux/scan-flow.md) and the
+[capture modes](docs/ui-ux/capture-modes.md).
 
 ## Quality checks and project skills
 

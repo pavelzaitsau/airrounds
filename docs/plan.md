@@ -16,9 +16,9 @@ See the [T0 report](t0.md) for the results and open checks.
   an independent check.
 - Test quiet air, no clients, an unavailable access point, and an SD card
   failure. Set time limits after bench measurements.
-- Keep the original step IDs T0 through T6, T8, and T9. T3 checks PCAP integrity
-  and access point context. The original plan's active step, T7, is outside
-  this release.
+- Keep the original step IDs T0 through T6, T8, and T9, and add T10. T3
+  checks PCAP integrity and access point context. The original plan's active
+  step, T7, is outside this release.
 
 ## Earlier findings
 
@@ -120,6 +120,7 @@ the limits and what happens when a visit uses its time.
 | T6: Up to three access points | T5b | Test zero, one, and three points, shared and distinct channels, loss or channel change, no traffic, and completion of all visits. |
 | T8: Observation windows | T6 | Limit extensions, ignore repeated observations, serve other points fairly, and enforce the absolute deadline. |
 | [T9: Hardware acceptance](t9.md) | T8 | Closed for the original beacon criteria. The report records the deferred checks and the later scan workflow evidence. |
+| [T10: Capture modes](t10.md) | T9 | Closed. Add the **Capture mode** choice with Beacon and two reserved placeholders. Move Beacon behind a mode contract in the firmware and the app, with per-mode frame types and frame chains; see the [design](capture-modes-design.md). Reserve the protocol fields in documentation only. Support any capture type on own networks for research purposes. Acceptance: the requirement, the mockup with its own test, the design, Beacon unchanged in the existing host tests and on hardware, and the menu checks in the UI emulator. |
 
 ## Bench checks and handoff
 

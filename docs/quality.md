@@ -50,6 +50,39 @@ temporary directory on each run. Sanitizers stop on the first detected error.
 ASan/UBSan and TSan run separately because their runtimes cannot be combined.
 The runner does not silently skip an unavailable tool or sanitizer.
 
+## Runaway tests
+
+`tools/quality/check.py` starts every command in its own process group
+under kernel limits. A test that hangs or loops cannot outlive the gate,
+and one that writes without end cannot write a file past 1 GiB.
+
+| Limit | Value | Effect |
+| --- | --- | --- |
+| Wall time per command | 180 s | The gate kills the whole process group, children included |
+| CPU time per process | 300 s | The kernel stops the process, even after the gate exits |
+| File size per file | 1 GiB | A write past the limit fails with `SIGXFSZ` |
+
+The gate also stops on Ctrl-C, `SIGTERM`, `SIGHUP`, and `SIGQUIT`, and the
+shell then sees 128 plus the signal number. A stopped command first gets
+`SIGTERM` and 2 s to remove its temporary files, then `SIGKILL`. A signal
+that the caller ignores, as `nohup` ignores `SIGHUP`, stays ignored. A
+signal that arrives during a cleanup waits until the cleanup ends. A lower
+limit that the shell already set stays in force.
+
+When a command ends, normally or not, the gate also kills the rest of its
+process group, so a background child cannot outlive its test. Every guard
+owns a temporary directory, and a guard started below another one, as in
+`tests/flipper/run_ui_emulator.py`, puts its directory inside the enclosing
+one. Each child registers its process group in its guard's directory before
+it runs. A guard that ends kills every group registered in its subtree,
+repeats until no new group appears, and removes the subtree. A child that
+starts after that fails instead of running unguarded.
+
+Run test binaries outside the gate, for example in a mutation harness,
+under the same limits: `ulimit -t 300 -f 1048576` in a bash shell, which
+counts file size in 1,024-byte blocks. Without the limits, a mutant that
+loops in a write keeps writing after its harness stops.
+
 ## Memory checks
 
 The gates fail on leaks, on unbounded stack frames, and on stack or RAM use
@@ -58,9 +91,9 @@ over a budget. The table lists the budgets for the current source.
 | Check | Gate | Budget | Current use |
 | --- | --- | --- | --- |
 | Heap leaks in host tests and the Flipper UI emulator | `make check` | None at exit | None |
-| Worst AirRounds call path on the Flipper app thread | `make embedded` | 2,048 B, half of `stack_size` | 1,432 B |
-| Global and static RAM of `airrounds_uart` | `make embedded` | 65,536 B | 52,144 B |
-| Largest stack frame in `airrounds_uart` | `make embedded` | 1,024 B | 640 B in `PassiveSession::save` |
+| Worst AirRounds call path on the Flipper app thread | `make embedded` | 2,048 B, half of `stack_size` | 1,448 B |
+| Global and static RAM of `airrounds_uart` | `make embedded` | 65,536 B | 52,160 B |
+| Largest stack frame in `airrounds_uart` | `make embedded` | 1,024 B | 656 B in `storage::writePcapRecords` |
 | Stack frame of `writeSessionJournal` | `make embedded` | 2,560 B | 2,512 B |
 
 LeakSanitizer is off by default on macOS, and Apple clang does not support

@@ -42,6 +42,12 @@ public:
         return size_;
     }
 
+    void clearOutcomes() {
+        for (size_t index = 0; index < size_; ++index) {
+            rows_[index].outcome = uart::Outcome::none;
+        }
+    }
+
     bool toggle(size_t index) {
         if (index >= size_ || outcome(index) == uart::Outcome::saved) {
             return true;

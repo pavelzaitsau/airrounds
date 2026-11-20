@@ -2,7 +2,7 @@
 
 #include <atomic>
 
-#include "pcap_capture.h"
+#include "pcap_record.h"
 #include "target.h"
 
 namespace airrounds {
@@ -22,7 +22,7 @@ struct BeaconView {
     size_t ssidSize = 0;
 };
 
-constexpr size_t maxBeaconSize = 2304;
+constexpr size_t maxBeaconSize = storage::pcapSnapLength;
 
 inline bool parseBeacon(uint8_t channel, const uint8_t* frame, size_t size, BeaconView& beacon) {
     constexpr size_t ssidIdOffset = 36;
@@ -183,13 +183,15 @@ public:
     const CaptureStatistics& captureStatistics() const { return captureStatistics_; }
 
     size_t savedPcapSize() const {
-        return state_ == VisitState::saved ? pcapHeaderSize + recordHeaderSize + frameSize_ : 0;
+        return state_ == VisitState::saved ? storage::pcapRecordFileSize(frameSize_) : 0;
     }
 
-private:
-    static constexpr size_t pcapHeaderSize = 24;
-    static constexpr size_t recordHeaderSize = 16;
+    // The first accepted beacon, which a save writes. Empty until hasSample() is true.
+    const uint8_t* sampleFrame() const { return frame_; }
+    size_t sampleSize() const { return hasSample() ? frameSize_ : 0; }
+    uint32_t sampleTimestampUs() const { return timestampUs_; }
 
+private:
     struct Observation {
         uint8_t parameters[4]; // Beacon interval and capability flags, in wire order.
         uint8_t ssid[32];
@@ -219,59 +221,11 @@ private:
         }
     }
 
-    static void writeLe32(uint8_t* field, uint32_t value) {
-        for (size_t index = 0; index < sizeof(value); ++index) {
-            field[index] = static_cast<uint8_t>(value);
-            value >>= 8U;
-        }
-    }
-
-    static constexpr size_t blockSize = 256;
-    using Capture = storage::PcapCapture<1, blockSize>;
-
     VisitState save(const char* path) {
-        Capture capture(path);
-        const bool saved = capture.open() && writePcap(capture) &&
-                           capture.finish() == storage::CaptureState::saved;
-        captureStatistics_ = {capture.bytesAccepted(), capture.overflowCount()};
-        return saved ? VisitState::saved : VisitState::storage_error;
-    }
-
-    bool writePcap(Capture& capture) const {
-        using storage::EnqueueStatus;
-
-        // Classic PCAP 2.4 with one raw IEEE 802.11 record and microsecond timestamps.
-        uint8_t header[pcapHeaderSize + recordHeaderSize]{0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4};
-        writeLe32(header + 16, maxFrameSize);
-        writeLe32(header + 20, 105);
-        writeLe32(header + 24, timestampUs_ / 1000000U);
-        writeLe32(header + 28, timestampUs_ % 1000000U);
-        const auto length = static_cast<uint32_t>(frameSize_);
-        writeLe32(header + 32, length);
-        writeLe32(header + 36, length);
-
-        if (capture.enqueue(header, sizeof(header)) != EnqueueStatus::queued ||
-            !drainBlock(capture)) {
-            return false;
-        }
-        for (size_t offset = 0; offset < frameSize_;) {
-            const size_t remaining = frameSize_ - offset;
-            const size_t count = remaining < blockSize ? remaining : blockSize;
-            if (capture.enqueue(frame_ + offset, count) != EnqueueStatus::queued ||
-                !drainBlock(capture)) {
-                return false;
-            }
-            offset += count;
-        }
-        return true;
-    }
-
-    static bool drainBlock(Capture& capture) {
-        auto result = capture.drainOne();
-        while (result == storage::WriteStatus::partial) {
-            result = capture.drainOne();
-        }
-        return result == storage::WriteStatus::complete;
+        const auto receipt = storage::writePcapRecord(path, frame_, frameSize_, timestampUs_,
+                                                      storage::managementFrames);
+        captureStatistics_ = {receipt.bytesWritten, receipt.queueOverflows};
+        return receipt.saved ? VisitState::saved : VisitState::storage_error;
     }
 
     static constexpr size_t observationCapacity = 4;

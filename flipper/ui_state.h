@@ -1,5 +1,6 @@
 #pragma once
 
+#include "capture_mode.h"
 #include "session_client.h"
 
 namespace airrounds {
@@ -19,6 +20,33 @@ inline HomeEntry homeEntry(Request pending, uart::State state, size_t count, boo
         return HomeEntry::setup;
     }
     return canStart ? HomeEntry::start : HomeEntry::board;
+}
+
+// What the Capture mode screen needs to know about the board to allow a change of mode.
+struct ModeLockInput {
+    bool uartOpen = true;
+    Link link = Link::ready;
+    Request pending = Request::none;
+    bool commandUnconfirmed = false;
+    uart::State session = uart::State::idle;
+    uart::ScanState scan = uart::ScanState::idle;
+};
+
+// The first lock that applies, or nullptr when the operator can change the mode. An unconfirmed
+// board state wins over the last known session, because a round can still run on the board.
+inline const char* captureModeLock(const ModeLockInput& board) {
+    if (!board.uartOpen || board.link != Link::ready || board.pending == Request::start ||
+        board.pending == Request::stop || board.commandUnconfirmed) {
+        return "Board state unknown";
+    }
+    if (sessionBusy(board.session)) {
+        return "Session active";
+    }
+    if (board.scan == uart::ScanState::running || board.pending == Request::scan ||
+        board.pending == Request::scan_stop) {
+        return "Scan active";
+    }
+    return nullptr;
 }
 
 struct RunReport {
@@ -54,12 +82,14 @@ inline const char* outcomeTitle(const RunReport& report) {
     return report.state == uart::State::stopped ? "Session stopped" : "Session ended";
 }
 
-inline const char* pointResult(uart::Outcome outcome, uart::State state) {
+inline const char* pointResult(uart::Outcome outcome, uart::State state,
+                               const CaptureModeInfo& mode = beaconMode()) {
     switch (outcome) {
     case uart::Outcome::saved:
-        return "Captured";
+        return mode.meaning == SuccessMeaning::absence_confirmed ? mode.resultMiss
+                                                                 : mode.resultSuccess;
     case uart::Outcome::not_observed:
-        return "Not seen";
+        return mode.resultMiss;
     case uart::Outcome::radio_error:
         return "Radio error";
     case uart::Outcome::storage_error:
@@ -70,18 +100,36 @@ inline const char* pointResult(uart::Outcome outcome, uart::State state) {
     return "Unknown";
 }
 
-inline const char* pointDetail(uart::Outcome outcome, uart::State state) {
+// The right-hand text of a Beacons list row after a round, by the mode's meaning of success.
+inline const char* networkRowStatus(uart::Outcome outcome,
+                                    const CaptureModeInfo& mode = beaconMode()) {
+    const bool absence = mode.meaning == SuccessMeaning::absence_confirmed;
+    switch (outcome) {
+    case uart::Outcome::none:
+        return "";
+    case uart::Outcome::saved:
+        return absence ? mode.rowMiss : mode.rowSuccess;
+    case uart::Outcome::not_observed:
+        return mode.rowMiss;
+    default:
+        return pointResult(outcome, uart::State::complete, mode);
+    }
+}
+
+inline const char* pointDetail(uart::Outcome outcome, uart::State state,
+                               const CaptureModeInfo& mode = beaconMode()) {
     switch (outcome) {
     case uart::Outcome::saved:
-        return "Captured to board SD";
+        return mode.meaning == SuccessMeaning::absence_confirmed ? mode.detailMiss
+                                                                 : mode.detailSuccess;
     case uart::Outcome::not_observed:
-        return "Point not seen";
+        return mode.detailMiss;
     case uart::Outcome::storage_error:
         return "SD write failed";
     case uart::Outcome::none:
         return state == uart::State::stopped ? "Stopped before result" : "Skipped after error";
     default:
-        return pointResult(outcome, state);
+        return pointResult(outcome, state, mode);
     }
 }
 

@@ -8,8 +8,9 @@
 #include <esp_timer.h>
 #include <esp_wifi.h>
 
+#include "beacon_mode.h"
 #include "capture_path.h"
-#include "passive_session.h"
+#include "pcap_record.h"
 #include "session_journal.h"
 #include "uart_protocol.h"
 
@@ -43,7 +44,7 @@ public:
     void startScan() override {
         scanList_.clear();
         scanState_ = ScanState::error;
-        if (radioFault_ || !openRadio()) {
+        if (radioFault_ || !openRadio(storage::managementFrames)) {
             return;
         }
         wifi_country_t country{};
@@ -90,16 +91,16 @@ public:
         if (budget.round.remainingAt(nowUs()) == 0) {
             return VisitStart::deadline;
         }
-        if (radioFault_ || !openRadio()) {
+        if (radioFault_ || !openRadio(mode_->needs().frameTypes)) {
             return VisitStart::radio_error;
         }
-        visit_.reset();
+        mode_->reset();
         return tuneAndListen(target, budget);
     }
 
     bool observationDone() const override {
         portENTER_CRITICAL(&receiveLock_);
-        const bool done = visit_.observationDone(nowUs() - startedUs_);
+        const bool done = mode_->done(nowUs() - startedUs_);
         portEXIT_CRITICAL(&receiveLock_);
         return done;
     }
@@ -117,8 +118,14 @@ public:
     }
 
     void beginSave(const CaptureId& id) override {
-        if (!visit_.hasSample()) {
-            visit_.finish(nullptr);
+        switch (mode_->finish()) {
+        case session::ModeResult::found:
+            break;
+        case session::ModeResult::error:
+            result_.store(Outcome::radio_error, std::memory_order_release);
+            return;
+        case session::ModeResult::absence_confirmed:
+        case session::ModeResult::not_observed:
             result_.store(Outcome::not_observed, std::memory_order_release);
             return;
         }
@@ -193,21 +200,25 @@ private:
     }
 
     static void onPacket(void* buffer, wifi_promiscuous_pkt_type_t type) {
-        if (buffer == nullptr || type != WIFI_PKT_MGMT) {
+        const uint8_t frameType = frameTypeOf(type);
+        if (buffer == nullptr || frameType == 0) {
             return;
         }
         const auto* packet = static_cast<const wifi_promiscuous_pkt_t*>(buffer);
         constexpr size_t fcsSize = 4;
         auto& self = instance();
         portENTER_CRITICAL(&self.receiveLock_);
-        if (self.scanChannel_ != 0 && self.scanChannel_ == packet->rx_ctrl.channel &&
-            packet->rx_ctrl.rx_state == 0 && packet->rx_ctrl.sig_len > fcsSize) {
+        if (self.scanChannel_ != 0 && frameType == storage::managementFrames &&
+            self.scanChannel_ == packet->rx_ctrl.channel && packet->rx_ctrl.rx_state == 0 &&
+            packet->rx_ctrl.sig_len > fcsSize) {
             self.observeNetwork(*packet, packet->rx_ctrl.sig_len - fcsSize);
         } else if (self.listening_) {
             auto& point = self.statistics_[self.currentPoint_];
-            ++point.managementFrames;
+            if (frameType == storage::managementFrames) {
+                ++point.managementFrames;
+            }
             if (packet->rx_ctrl.rx_state == 0 && packet->rx_ctrl.sig_len > fcsSize &&
-                self.visit_.receive(packet->payload, packet->rx_ctrl.sig_len - fcsSize,
+                self.mode_->onFrame(packet->payload, packet->rx_ctrl.sig_len - fcsSize,
                                     packet->rx_ctrl.channel, self.nowUs() - self.startedUs_)) {
                 ++point.acceptedBeacons;
             }
@@ -215,7 +226,35 @@ private:
         portEXIT_CRITICAL(&self.receiveLock_);
     }
 
-    bool openRadio() {
+    static uint8_t frameTypeOf(wifi_promiscuous_pkt_type_t type) {
+        switch (type) {
+        case WIFI_PKT_MGMT:
+            return storage::managementFrames;
+        case WIFI_PKT_CTRL:
+            return storage::controlFrames;
+        case WIFI_PKT_DATA:
+            return storage::dataFrames;
+        default:
+            return 0;
+        }
+    }
+
+    // The receive filter passes only the frame types the scan or the capture mode declared.
+    static uint32_t receiveFilter(uint8_t frameTypes) {
+        uint32_t mask = 0;
+        if ((frameTypes & storage::managementFrames) != 0) {
+            mask |= WIFI_PROMIS_FILTER_MASK_MGMT;
+        }
+        if ((frameTypes & storage::controlFrames) != 0) {
+            mask |= WIFI_PROMIS_FILTER_MASK_CTRL;
+        }
+        if ((frameTypes & storage::dataFrames) != 0) {
+            mask |= WIFI_PROMIS_FILTER_MASK_DATA;
+        }
+        return mask;
+    }
+
+    bool openRadio(uint8_t frameTypes) {
         const esp_err_t eventLoop = esp_event_loop_create_default();
         if (eventLoop != ESP_OK && eventLoop != ESP_ERR_INVALID_STATE) {
             return false;
@@ -228,8 +267,13 @@ private:
         const bool started = esp_wifi_set_storage(WIFI_STORAGE_RAM) == ESP_OK &&
                              esp_wifi_set_mode(WIFI_MODE_NULL) == ESP_OK &&
                              esp_wifi_start() == ESP_OK;
-        wifi_promiscuous_filter_t filter{WIFI_PROMIS_FILTER_MASK_MGMT};
-        if (started && esp_wifi_set_promiscuous_filter(&filter) == ESP_OK &&
+        wifi_promiscuous_filter_t filter{receiveFilter(frameTypes)};
+        // Control frames pass a second, per-subtype filter; ask for every subtype explicitly.
+        wifi_promiscuous_filter_t controlFilter{WIFI_PROMIS_CTRL_FILTER_MASK_ALL};
+        if (started && filter.filter_mask != 0 &&
+            esp_wifi_set_promiscuous_filter(&filter) == ESP_OK &&
+            ((frameTypes & storage::controlFrames) == 0 ||
+             esp_wifi_set_promiscuous_ctrl_filter(&controlFilter) == ESP_OK) &&
             esp_wifi_set_promiscuous_rx_cb(onPacket) == ESP_OK) {
             return true;
         }
@@ -263,8 +307,7 @@ private:
         portENTER_CRITICAL(&receiveLock_);
         const auto now = nowUs();
         const auto shareUs = budget.shareAt(now);
-        const bool started =
-            shareUs != 0 && visit_.startAdaptive(target, shareUs) == session::StartResult::started;
+        const bool started = shareUs != 0 && mode_->begin(target, shareUs);
         if (started) {
             startedUs_ = now;
             statistics_[currentPoint_].listenStartedUs = now;
@@ -315,14 +358,13 @@ private:
         if (!capturePath(path, sizeof(path), "/sd", savedVisit_) || !mountCard()) {
             return Outcome::storage_error;
         }
-        const auto result = visit_.finish(path);
-        const auto& capture = visit_.captureStatistics();
+        const auto receipt = storage::writePcapRecords(path, *mode_, mode_->needs().frameTypes);
         auto& point = statistics_[currentPoint_];
-        point.bytesWritten = capture.bytesWritten;
-        point.queueOverflows = capture.queueOverflows;
-        point.verifiedFileSize = visit_.savedPcapSize();
+        point.bytesWritten = receipt.bytesWritten;
+        point.queueOverflows = receipt.queueOverflows;
+        point.verifiedFileSize = receipt.saved ? storage::pcapFileSize(*mode_) : 0;
         unmountCard();
-        return result == session::VisitState::saved ? Outcome::saved : Outcome::storage_error;
+        return receipt.saved ? Outcome::saved : Outcome::storage_error;
     }
 
     static void journalTask(void* context) {
@@ -349,7 +391,8 @@ private:
         journalPending_.store(false, std::memory_order_release);
     }
 
-    session::PassiveSession visit_;
+    session::BeaconMode beacon_;
+    session::CaptureMode* mode_ = &beacon_;
     mutable portMUX_TYPE receiveLock_ = portMUX_INITIALIZER_UNLOCKED;
     uint64_t startedUs_ = 0;
     bool listening_ = false;

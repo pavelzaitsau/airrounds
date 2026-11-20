@@ -538,17 +538,20 @@ void scannedFlow() {
     cardWith({4});
     emu::scenario = [&] {
         board.advance(8);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyDown);
         tap(InputKeyDown);
         tap(InputKeyOk);
         screen("Flash board hardware");
         tap(InputKeyBack);
         layout("Pb 4,11 AirRounds\n"
                "Sb 5,22 Scan area\n"
-               "box 1,24 124x11\n"
-               "Sw 5,33 Flash board hardware\n"
-               "Sb 5,44 Test board\n"
-               "Sb 5,55 About\n");
+               "Sb 5,33 Capture mode\n"
+               "box 1,35 124x11\n"
+               "Sw 5,44 Flash board hardware\n"
+               "Sb 5,55 Test board\n"
+               "Sb 123,63 v\n");
+        tap(InputKeyUp);
         tap(InputKeyUp);
         tap(InputKeyOk);
         screen("Scanning...", "Listening for networks", "Back to cancel");
@@ -556,7 +559,7 @@ void scannedFlow() {
         board.advance();
         screen("Canceling...", "Listening for networks");
         board.advance(20);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         tap(InputKeyOk);
         board.advance(60);
         screen("Beacons", "0/5 selected", "[ ] TELEPORT", "[ ] Studio", "[ ] Guest", "v", "Scan");
@@ -655,7 +658,7 @@ void scanCancelShowsCleanupError() {
         board.advance(15);
         screen("Cancel failed", "Check Devboard", "Scan");
         tap(InputKeyBack);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
     };
     runApp();
 }
@@ -1341,7 +1344,8 @@ void scanHomeReopensSession() {
         board.advance(8);
         screen("Capture", "Captured 0/2", "Listening", "Point 1", "Stop");
         tap(InputKeyBack);
-        screen("AirRounds", "Session status", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
         assert(!shows("Scan area"));
         tap(InputKeyOk);
         screen("Capture", "Captured 0/2", "Listening", "Point 1", "Stop");
@@ -1349,7 +1353,8 @@ void scanHomeReopensSession() {
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
         board.advance(12);
-        screen("AirRounds", "Session status", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
         tap(InputKeyOk);
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
@@ -1357,7 +1362,7 @@ void scanHomeReopensSession() {
         screen("Session ended", "2 of 2 captured", "Results");
         // No scan has run, so Back leaves the result for the main menu.
         tap(InputKeyBack);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         tap(InputKeyOk);
         screen("Scanning...", "Listening for networks", "Back to cancel");
     };
@@ -1547,7 +1552,7 @@ void failedRescanKeepsTheList() {
         screen("Beacons", "1/5 selected", "[x] TELEPORT", "[ ] Studio", "[ ] Guest", "v", "Scan",
                "Start (1)");
         tap(InputKeyBack);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         exitApp();
     };
     runApp();
@@ -1841,7 +1846,7 @@ void scanStopWhileSaving() {
                "Scan", "Start (1)");
         assert(board.receiver.visits == 1);
         tap(InputKeyBack);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
     };
     runApp();
 }
@@ -1938,6 +1943,101 @@ void screenLayouts() {
     runApp();
 }
 
+void captureModeChoice() {
+    Board board(false, true);
+    cardWith({});
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyUp); // Focus wraps to the last item, and the menu scrolls.
+        layout("Pb 4,11 AirRounds\n"
+               "Sb 5,22 Capture mode\n"
+               "Sb 5,33 Flash board hardware\n"
+               "Sb 5,44 Test board\n"
+               "box 1,46 124x11\n"
+               "Sw 5,55 About\n"
+               "Sb 123,25 ^\n");
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyOk);
+        layout("Pb 4,11 Capture mode\n"
+               "box 1,13 124x11\n"
+               "Sw 5,22 * Beacon\n"
+               "Sb 5,33 Todo A\n"
+               "Sb 101,33 Soon\n"
+               "Sb 5,44 Todo B\n"
+               "Sb 101,44 Soon\n");
+
+        // A placeholder mode keeps Beacon and says why until the next key press.
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Not available yet");
+        tap(InputKeyDown);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+        tap(InputKeyOk);
+        tap(InputKeyUp);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+
+        // Back changes nothing; OK on Beacon returns with focus on Capture mode.
+        tap(InputKeyBack);
+        layout("Pb 4,11 AirRounds\n"
+               "Sb 5,22 Scan area\n"
+               "box 1,24 124x11\n"
+               "Sw 5,33 Capture mode\n"
+               "Sb 5,44 Flash board hardware\n"
+               "Sb 5,55 Test board\n"
+               "Sb 123,63 v\n");
+        tap(InputKeyOk); // Focus starts on the current mode.
+        tap(InputKeyOk);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+
+        // An unknown board state locks the choice; the lock ends when the board answers again.
+        board.goOffline();
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
+               "Board state unknown");
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
+               "Board state unknown");
+        board.comeBack();
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+    };
+    runApp();
+}
+
+void captureModeLockedDuringRound() {
+    Board board(false, true);
+    cardWith({});
+    board.otherClient("0000000000000005 00000001 round 020000000001 0b 020000000002 0b");
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyBack);
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        tap(InputKeyDown);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        tap(InputKeyUp);
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+
+        // A lost link during the round hides the last known state behind the unknown one.
+        board.goOffline();
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
+               "Board state unknown");
+        board.comeBack();
+        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        tap(InputKeyBack);
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
+    };
+    runApp();
+}
+
 void scanLayouts() {
     Board board(false, true);
     cardWith({});
@@ -1947,9 +2047,10 @@ void scanLayouts() {
         layout("Pb 4,11 AirRounds\n"
                "box 1,13 124x11\n"
                "Sw 5,22 Scan area\n"
-               "Sb 5,33 Flash board hardware\n"
-               "Sb 5,44 Test board\n"
-               "Sb 5,55 About\n");
+               "Sb 5,33 Capture mode\n"
+               "Sb 5,44 Flash board hardware\n"
+               "Sb 5,55 Test board\n"
+               "Sb 123,63 v\n");
         tap(InputKeyOk);
         board.advance(60);
         layout("Pb 4,11 Beacons\n"
@@ -2013,9 +2114,10 @@ void scanLayouts() {
         layout("Pb 4,11 AirRounds\n"
                "Sb 5,22 Scan area\n"
                "box 1,24 124x11\n"
-               "Sw 5,33 Flash board hardware\n"
-               "Sb 5,44 Test board\n"
-               "Sb 5,55 About\n");
+               "Sw 5,33 Capture mode\n"
+               "Sb 5,44 Flash board hardware\n"
+               "Sb 5,55 Test board\n"
+               "Sb 123,63 v\n");
         tap(InputKeyUp);
 
         // Another client runs four of the scanned points. Results use the scanned names.
@@ -2289,7 +2391,8 @@ void scanRestart() {
         screen("Capture", "Captured 0/1", "Listening", "Studio", "Stop");
         // This session is not the one Flipper started, so Back leaves it.
         tap(InputKeyBack);
-        screen("AirRounds", "Session status", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
     };
     runApp();
 }
@@ -2334,7 +2437,7 @@ void lostScanStart() {
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
         board.advance(15);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         // That round was not Flipper's. Its result stays out of the list.
         tap(InputKeyOk);
         board.advance(60);
@@ -2359,7 +2462,8 @@ void anotherClientTakesTheSessionId() {
         board.comeBack();
         screen("Capture", "Captured 0/1", "Listening", "Studio", "Stop");
         tap(InputKeyBack);
-        screen("AirRounds", "Session status", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
     };
     runApp();
 
@@ -2383,7 +2487,8 @@ void anotherClientTakesTheSessionId() {
         later.comeBack();
         screen("Capture", "Captured 0/1", "Listening", "Guest", "Stop");
         tap(InputKeyBack);
-        screen("AirRounds", "Session status", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
+               "v");
     };
     runApp();
 }
@@ -2431,7 +2536,7 @@ void scanStopAfterTheVisit() {
                "Start (1)");
         tap(InputKeyBack);
         early.advance(10);
-        screen("AirRounds", "Scan area", "Flash board hardware", "Test board", "About");
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         tap(InputKeyOk);
         early.advance(60);
         screen("Beacons", "0/5 selected", "[ ] TELEPORT", "Not seen", "[ ] Studio", "[ ] Guest",
@@ -3146,6 +3251,8 @@ int main() {
     scanStopWhileSaving();
     screenLayouts();
     scanLayouts();
+    captureModeChoice();
+    captureModeLockedDuringRound();
     freshReadIdsEachRun();
     openingShowsActiveSessionOnce();
     backWhileStarting();

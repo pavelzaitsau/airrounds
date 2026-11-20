@@ -143,7 +143,9 @@ struct App {
     View* view = nullptr;
     ByteInput* keyboard = nullptr;
     FuriHalSerialHandle* serial = nullptr;
-    FuriStreamBuffer* rx = nullptr;
+    // Received bytes with the tick of their interrupt. A slow SD write can block the event loop
+    // past the reply deadline, so the tick handler cannot tell when a byte arrived.
+    FuriMessageQueue* rx = nullptr;
     std::atomic<bool> damaged{false};
 
     session::Profile profile;
@@ -242,6 +244,12 @@ void networkName(const App& app, const session::Target& target, size_t slot, cha
 
 bool canStart(const App& app) {
     return app.serial != nullptr && app.client.canStart(app.profile.size());
+}
+
+// A scan-capable board starts rounds of selected beacons, so the manual profile does not decide
+// whether the status screens call the board ready.
+bool readyToStart(const App& app) {
+    return app.client.supportsScan() ? app.client.canStart(1) : canStart(app);
 }
 
 bool unconfirmedStart(const App& app) {
@@ -379,7 +387,7 @@ void showStatus(Frame& frame, const App& app) {
             frame.binding = {Action::stop, 0, report.id};
         }
     } else if (client.state() == State::idle) {
-        title(frame, canStart(app) ? "Ready" : boardIssue(app));
+        title(frame, readyToStart(app) ? "Ready" : boardIssue(app));
         frame.row("Press Back for menu");
     } else {
         showOutcome(frame, currentRun(app));
@@ -1099,8 +1107,8 @@ void onRx(FuriHalSerialHandle* handle, FuriHalSerialRxEvent event, void* context
                                 FuriHalSerialRxEventOverrunError | FuriHalSerialRxEventParityError;
     bool damaged = (event & errors) != 0;
     if ((event & FuriHalSerialRxEventData) != 0) {
-        const uint8_t byte = furi_hal_serial_async_rx(handle);
-        damaged = damaged || furi_stream_buffer_send(app.rx, &byte, 1, 0) != 1;
+        const uart::TimedByte byte{furi_hal_serial_async_rx(handle), furi_get_tick()};
+        damaged = damaged || furi_message_queue_put(app.rx, &byte, 0) != FuriStatusOk;
     }
     if (damaged) {
         app.damaged.store(true, std::memory_order_relaxed);
@@ -1146,6 +1154,15 @@ void updateRun(App& app, bool wasBusy) {
         !report.round.profile.matches(app.submitted)) {
         app.networkRun = {};
     }
+    // updateRun runs only after a status, Start or Stop reply with no command left in flight. A
+    // lost Start is never resent, and UART keeps request order. Once the board applies the Start,
+    // every reply of this boot reports that session until the round ends, and the block above
+    // records its result. Any other session means the Start never ran or the board moved past it
+    // unseen, so no later reply can match the run.
+    if (app.networkRun.session != 0 && report.id.boot == app.networkRun.boot &&
+        report.id.session != app.networkRun.session) {
+        app.networkRun = {};
+    }
     if (app.opening) {
         app.opening = false;
         if (flipper::sessionBusy(report.state)) {
@@ -1157,17 +1174,20 @@ void updateRun(App& app, bool wasBusy) {
 void tick(void* context) {
     auto& app = *static_cast<App*>(context);
     if (app.serial != nullptr) {
+        // Count the bytes before reading the clock, so no byte to handle is newer than now.
+        const uint32_t count = furi_message_queue_get_count(app.rx);
         const uint32_t now = furi_get_tick();
-        uint8_t bytes[256];
-        const size_t count = furi_stream_buffer_receive(app.rx, bytes, sizeof(bytes), 0);
         const bool wasBusy = flipper::sessionBusy(app.client.state());
         const auto pending = app.client.pending();
         const auto precedingLink = app.client.link();
-        if (app.damaged.exchange(false, std::memory_order_relaxed)) {
+        const bool damaged = app.damaged.exchange(false, std::memory_order_relaxed);
+        if (damaged) {
             app.client.transportLost(now);
-        } else {
-            for (size_t i = 0; i < count; ++i) {
-                app.client.receive({bytes[i], now});
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            uart::TimedByte byte{};
+            if (furi_message_queue_get(app.rx, &byte, 0) == FuriStatusOk && !damaged) {
+                app.client.receive(byte);
             }
         }
         if ((pending == Request::status || pending == Request::start || pending == Request::stop) &&
@@ -1239,7 +1259,7 @@ extern "C" int32_t airrounds_app(void*) {
     expansion_disable(expansion);
     app->serial = furi_hal_serial_control_acquire(FuriHalSerialIdUsart);
     if (app->serial != nullptr) {
-        app->rx = furi_stream_buffer_alloc(512, 1);
+        app->rx = furi_message_queue_alloc(512, sizeof(uart::TimedByte));
         furi_hal_serial_init(app->serial, 115200);
         furi_hal_serial_async_rx_start(app->serial, onRx, app, true);
     } else {
@@ -1259,7 +1279,7 @@ extern "C" int32_t airrounds_app(void*) {
         furi_hal_serial_deinit(app->serial);
         furi_hal_serial_control_release(app->serial);
         expansion_enable(expansion);
-        furi_stream_buffer_free(app->rx);
+        furi_message_queue_free(app->rx);
     }
     furi_record_close(RECORD_EXPANSION);
     view_dispatcher_remove_view(app->dispatcher, addressView);

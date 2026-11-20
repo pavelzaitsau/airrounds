@@ -168,9 +168,10 @@ Read the `aps` fields for each result. The original `hello`, `start`,
 A `round_status_log` reply inserts `journal <state>` before the usual
 `aps` fields. `round_status_detail` inserts `interrupted <flag>` just before
 `aps`, after the optional journal field. Flag `1` means Stop interrupted the
-last `not_observed` point. Flag `0` covers all other cases, including a point
-that finished without a beacon before the round deadline prevented the next
-visit. The client can keep the interrupted point selected and mark a completed
+last `not_observed` point. A Stop before the first visit starts also sets flag
+`1`, even after the round deadline, because no point was visited. Flag `0`
+covers all other cases, including a point that finished without a beacon
+before the round deadline prevented the next visit. The client can keep the interrupted point selected and mark a completed
 miss **Not seen**. The existing round replies keep their formats.
 
 | Journal state | Meaning |

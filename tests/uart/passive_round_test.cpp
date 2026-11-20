@@ -1,9 +1,15 @@
 #include <array>
+// Keep every check active in builds that define NDEBUG.
+#undef NDEBUG
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
+
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "../../firmware/esp32/uart/session_journal.h"
 #include "passive_session.h"
@@ -129,6 +135,20 @@ private:
     Outcome result_ = Outcome::none;
 };
 
+void checkVisitShares() {
+    const RoundBudget round{1000, 10};
+    assert(round.remainingAt(1000) == 10);
+    assert(round.remainingAt(1003) == 7);
+    assert(round.remainingAt(1010) == 0);
+    assert(round.remainingAt(1020) == 0);
+    // Each share rounds up, so any time left gives the current point a positive share.
+    assert((VisitBudget{round, 3}.shareAt(1000) == 4));
+    assert((VisitBudget{round, 3}.shareAt(1001) == 3));
+    assert((VisitBudget{round, 2}.shareAt(1009) == 1));
+    assert((VisitBudget{round, 1}.shareAt(1009) == 1));
+    assert((VisitBudget{round, 1}.shareAt(1010) == 0));
+}
+
 void checkFile(const std::string& file, const Target& target) {
     assert(storage::recoverPcap(file.c_str()) == storage::CaptureState::saved);
     std::ifstream input(file, std::ios::binary);
@@ -136,7 +156,8 @@ void checkFile(const std::string& file, const Target& target) {
     const auto expected = beacon(target);
     decltype(beacon(target)) actual{};
     input.read(reinterpret_cast<char*>(actual.data()), static_cast<std::streamsize>(actual.size()));
-    assert(input && actual == expected);
+    assert(input);
+    assert(actual == expected);
     assert(input.peek() == std::char_traits<char>::eof());
 }
 
@@ -196,8 +217,10 @@ void checkRound(const char* directory, uint32_t sessionId,
     visit.receive(third);
     visit.expire();
     round.poll();
-    assert(round.state() == State::complete && round.outcome() == Outcome::saved);
-    assert(round.status().next() == 3 && round.status().results[2] == Outcome::saved);
+    assert(round.state() == State::complete);
+    assert(round.outcome() == Outcome::saved);
+    assert(round.status().next() == 3);
+    assert(round.status().results[2] == Outcome::saved);
 
     const VisitId id{boot, sessionId};
     checkFile(visit.path({id, 1}), first);
@@ -224,13 +247,48 @@ void checkQuietRound(const char* directory) {
     assert(round.state() == State::running);
     visit.expire();
     round.poll();
-    assert(round.state() == State::complete && round.outcome() == Outcome::not_observed);
+    assert(round.state() == State::complete);
+    assert(round.outcome() == Outcome::not_observed);
     assert(round.status().results[0] == Outcome::not_observed);
     assert(round.status().results[1] == Outcome::not_observed);
     for (unsigned slot : {1U, 2U}) {
         const auto file = visit.path({id, slot});
         assert(storage::recoverPcap(file.c_str()) == storage::CaptureState::missing);
     }
+}
+
+void checkDeadlineStopsTheRound(PassiveRound& round, const Visit& visit,
+                                const session::Profile& profile) {
+    assert(round.state() == State::stopped);
+    assert(round.outcome() == Outcome::saved);
+    assert(visit.setupCount == 1);
+    assert(round.status().results[1] == Outcome::none);
+    assert(round.status().results[2] == Outcome::none);
+    const bool restarted = round.start({boot, 7}, profile);
+    assert(restarted);
+    checkActive(round, visit, 0);
+}
+
+void checkLaterPointsShareTheRest(PassiveRound& round, Visit& visit, const VisitId& id,
+                                  const Target& third) {
+    // Two points share the six seconds left after the save and radio setup.
+    checkActive(round, visit, 1);
+    visit.advance(2999999);
+    round.poll();
+    checkActive(round, visit, 1);
+    visit.receive(quietSecond);
+    visit.advance(1);
+    round.poll();
+    checkActive(round, visit, 2);
+    assert(round.status().results[1] == Outcome::saved);
+    visit.advance(3000000);
+    visit.receive(third);
+    assert(!visit.hasSample());
+    round.poll();
+    assert(round.state() == State::complete);
+    assert(round.outcome() == Outcome::saved);
+    assert(round.status().results[2] == Outcome::not_observed);
+    checkFile(visit.path({id, 2}), quietSecond);
 }
 
 void checkRoundDeadline(const char* directory, bool canStartNextVisit) {
@@ -259,34 +317,11 @@ void checkRoundDeadline(const char* directory, bool canStartNextVisit) {
     assert(round.status().results[0] == Outcome::saved);
     checkFile(visit.path({id, 1}), first);
 
-    if (!canStartNextVisit) {
-        assert(round.state() == State::stopped && round.outcome() == Outcome::saved);
-        assert(visit.setupCount == 1);
-        assert(round.status().results[1] == Outcome::none);
-        assert(round.status().results[2] == Outcome::none);
-        const bool restarted = round.start({boot, 7}, profile);
-        assert(restarted);
-        checkActive(round, visit, 0);
-        return;
+    if (canStartNextVisit) {
+        checkLaterPointsShareTheRest(round, visit, id, third);
+    } else {
+        checkDeadlineStopsTheRound(round, visit, profile);
     }
-
-    // Two points share the six seconds left after the save and radio setup.
-    checkActive(round, visit, 1);
-    visit.advance(2999999);
-    round.poll();
-    checkActive(round, visit, 1);
-    visit.receive(quietSecond);
-    visit.advance(1);
-    round.poll();
-    checkActive(round, visit, 2);
-    assert(round.status().results[1] == Outcome::saved);
-    visit.advance(3000000);
-    visit.receive(third);
-    assert(!visit.hasSample());
-    round.poll();
-    assert(round.state() == State::complete && round.outcome() == Outcome::saved);
-    assert(round.status().results[2] == Outcome::not_observed);
-    checkFile(visit.path({id, 2}), quietSecond);
 }
 
 void checkSetupDeadline(const char* directory) {
@@ -305,7 +340,8 @@ void checkSetupDeadline(const char* directory) {
     visit.setupDelayUs = 20000000;
     visit.expire();
     round.poll();
-    assert(round.state() == State::stopped && round.outcome() == Outcome::not_observed);
+    assert(round.state() == State::stopped);
+    assert(round.outcome() == Outcome::not_observed);
     assert(round.status().results[0] == Outcome::not_observed);
     assert(round.status().results[1] == Outcome::not_observed);
     assert(round.status().results[2] == Outcome::none);
@@ -313,17 +349,19 @@ void checkSetupDeadline(const char* directory) {
     visit.setupDelayUs = 30000000;
     const bool restarted = round.start({boot, 9}, profile);
     assert(restarted);
-    assert(round.state() == State::error && round.outcome() == Outcome::radio_error);
+    assert(round.state() == State::error);
+    assert(round.outcome() == Outcome::radio_error);
     assert(round.status().results[0] == Outcome::radio_error);
 }
 
-void checkInterruptedRound(const char* directory) {
+void checkPowerLossKeepsCheckpoint(const char* directory) {
     session::Profile profile;
     const bool valid = profile.add(first) && profile.add(quietSecond);
     assert(valid);
     const VisitId id{boot, 10};
     Visit visit(directory, true);
     {
+        // The round object goes away mid-round, as it does when the board loses power.
         PassiveRound round(visit);
         const bool started = round.start(id, profile);
         assert(started);
@@ -355,10 +393,74 @@ void checkInterruptedRound(const char* directory) {
     assert(storage::SdFile::probe(final) == storage::FilePresence::missing);
 }
 
+void checkStopDuringSave(const char* directory) {
+    const Target third{{2, 0, 0, 0, 0, 3}, 11};
+    session::Profile profile;
+    const bool valid = profile.add(first) && profile.add(quietSecond) && profile.add(third);
+    assert(valid);
+    Visit visit(directory);
+    PassiveRound round(visit);
+    const VisitId id{boot, 11};
+    const bool started = round.start(id, profile);
+    assert(started);
+
+    visit.receive(first);
+    visit.holdSave = true;
+    visit.expire();
+    round.poll();
+    assert(round.state() == State::finalizing);
+    // Stop during the first save keeps that file and skips the later points.
+    round.stop();
+    assert(round.state() == State::finalizing);
+    visit.holdSave = false;
+    round.poll();
+    assert(round.state() == State::stopped);
+    assert(round.outcome() == Outcome::saved);
+    assert(round.status().results[0] == Outcome::saved);
+    assert(round.status().results[1] == Outcome::none);
+    assert(round.status().results[2] == Outcome::none);
+    assert(round.status().interruption == VisitInterruption::no);
+    assert(visit.setupCount == 1);
+    checkFile(visit.path({id, 1}), first);
+    const auto skipped = visit.path({id, 2});
+    assert(storage::recoverPcap(skipped.c_str()) == storage::CaptureState::missing);
+    round.poll();
+    assert(round.state() == State::stopped);
+    assert(visit.setupCount == 1);
+}
+
+// The test writes fixed file names, so it needs a fresh directory of its own.
+const char* directoryProblem(int argc, char** argv) {
+    if (argc != 2) {
+        return "the directory argument is missing";
+    }
+    struct stat info;
+    if (stat(argv[1], &info) != 0 || !S_ISDIR(info.st_mode)) {
+        return "the argument is not a directory";
+    }
+    DIR* directory = opendir(argv[1]);
+    if (directory == nullptr) {
+        return "the directory cannot be read";
+    }
+    bool empty = true;
+    while (const dirent* entry = readdir(directory)) {
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+            empty = false;
+        }
+    }
+    closedir(directory);
+    return empty ? nullptr : "the directory is not empty";
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
-    assert(argc == 2);
+    if (const char* problem = directoryProblem(argc, argv)) {
+        std::cerr << "passive_round_test: " << problem << "; pass an empty temporary directory\n";
+        return EXIT_FAILURE;
+    }
+    alarm(30); // A loop that never ends fails the test instead of hanging it.
+    checkVisitShares();
     checkRound(argv[1], 1, {6, 6}, true);
     checkRound(argv[1], 2, {1, 11}, true);
     checkRound(argv[1], 3, {6, 11}, false);
@@ -366,7 +468,8 @@ int main(int argc, char** argv) try {
     checkRoundDeadline(argv[1], true);
     checkRoundDeadline(argv[1], false);
     checkSetupDeadline(argv[1]);
-    checkInterruptedRound(argv[1]);
+    checkPowerLossKeepsCheckpoint(argv[1]);
+    checkStopDuringSave(argv[1]);
     std::cout << "Passive round: visit order, extensions, and round deadline passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

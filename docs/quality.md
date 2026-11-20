@@ -3,14 +3,14 @@
 Run the commands from the repository root. They do not flash a device.
 Python 3 and Make run the checks; no CMake or Python packages are needed.
 `tcpdump` reads the synthetic PCAP produced by the normal test run; macOS
-provides it by default.
+provides it by default. Node.js runs the UI prototype tests.
 
 ## Install the host tools
 
 On macOS:
 
 ```sh
-brew install llvm cppcheck
+brew install llvm cppcheck node
 ```
 
 The runner finds Homebrew's keg-only LLVM on Apple Silicon and Intel Macs,
@@ -31,14 +31,15 @@ make embedded
 `make check` runs every host check below and stops with a nonzero status on
 failure. It never reformats files. `make embedded` requires the pinned SDKs
 from [T0](t0.md); it builds the ESP32 examples, the UART firmware, and the Flipper app. It checks
-each ESP32 image and runs Cppcheck with the target SDK settings.
+each ESP32 image, runs Cppcheck with the target SDK settings, and checks the
+[memory budgets](#memory-checks).
 
 | Command | Checks |
 | --- | --- |
 | `make format-check` | Formatting of project `.c`, `.cpp`, `.h`, and `.ino` files |
 | `make format` | Applies `.clang-format` to those files |
-| `make test` | C++11 storage and UART tests, Mac PCAP checks, and the native Flipper UI emulator |
-| `make asan` | The C++ host tests with AddressSanitizer and UndefinedBehaviorSanitizer |
+| `make test` | Every C++11 host test, the Python tests, the Node prototype tests, Mac PCAP checks, and the native Flipper UI emulator. It fails if a test file is out of reach. |
+| `make asan` | The C++ host tests with AddressSanitizer, LeakSanitizer, and UndefinedBehaviorSanitizer |
 | `make tsan` | The C++ host tests with ThreadSanitizer, in separate executables |
 | `make tidy` | Clang-Tidy and its Clang Analyzer checks on the host test translation units |
 | `make cppcheck` | Host tests and included production headers, with native and 32-bit ESP32 profiles |
@@ -48,6 +49,41 @@ The tests include the real storage headers. File-system tests use a fresh
 temporary directory on each run. Sanitizers stop on the first detected error.
 ASan/UBSan and TSan run separately because their runtimes cannot be combined.
 The runner does not silently skip an unavailable tool or sanitizer.
+
+## Memory checks
+
+The gates fail on leaks, on unbounded stack frames, and on stack or RAM use
+over a budget. The table lists the budgets for the current source.
+
+| Check | Gate | Budget | Current use |
+| --- | --- | --- | --- |
+| Heap leaks in host tests and the Flipper UI emulator | `make check` | None at exit | None |
+| Worst AirRounds call path on the Flipper app thread | `make embedded` | 2,048 B, half of `stack_size` | 1,432 B |
+| Global and static RAM of `airrounds_uart` | `make embedded` | 65,536 B | 52,144 B |
+| Largest stack frame in `airrounds_uart` | `make embedded` | 1,024 B | 640 B in `PassiveSession::save` |
+| Stack frame of `writeSessionJournal` | `make embedded` | 2,560 B | 2,512 B |
+
+LeakSanitizer is off by default on macOS, and Apple clang does not support
+it. The host gate and the emulator therefore use the Homebrew LLVM and set
+`detect_leaks=1`. Before the ASan run, a canary program leaks 64 bytes. The
+gate fails if LeakSanitizer does not report that leak.
+
+The Flipper check compiles `airrounds.cpp` for ARM with `-fcallgraph-info=su`.
+It adds the `airrounds_app` frame to the deepest path of every other function,
+because the event loop can call any callback on that thread. A call cycle, a
+dynamic frame, or an indirect call without listed targets fails the check.
+List the targets of a new function-pointer call in `tools/quality/memory.py`.
+The other half of the stack holds SDK, `printf`, and event-loop frames.
+
+The pinned ESP32 compiler, GCC 8.4, has no call-graph output. The ESP32 check
+therefore limits each frame from `-fstack-usage` and the global RAM reported
+by `arduino-cli`. `writeSessionJournal` keeps its 2,304-byte journal text on
+the 8,192-byte `airrounds-log` task stack and has its own cap. A new frame over
+1,024 B needs a review and an entry in `tools/quality/memory.py`.
+
+The checks count AirRounds frames only. SD, FATFS, Wi-Fi, and SDK frames are
+precompiled and have no stack reports. The T6 bench recorded at least 2,212 B
+free on the Flipper app stack. No measurement covers the ESP32 task stacks yet.
 
 ## Worktrees and outputs
 

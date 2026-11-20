@@ -2,6 +2,7 @@
 """Compile the ESP32 examples and the Flipper app, without flashing devices."""
 
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 
 from check import tool
+import memory
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = Path(os.environ.get("AIRROUNDS_TOOLS", ROOT / ".airrounds-tools")).resolve()
@@ -57,8 +59,23 @@ def firmware_metadata(environment):
             fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
     build = fingerprint.hexdigest()[:16]
     print(f"AirRounds source build ID {build}, revision {revision}", flush=True)
+    # -fstack-usage only writes a report; it leaves the generated code unchanged.
     return ["--build-property",
-            f"compiler.cpp.extra_flags=-DAIRROUNDS_BUILD_ID={build} -DAIRROUNDS_REVISION={revision}"]
+            f"compiler.cpp.extra_flags=-DAIRROUNDS_BUILD_ID={build} -DAIRROUNDS_REVISION={revision}"
+            " -fstack-usage"]
+
+
+def flipper_callgraph(application, output):
+    """Recompile the Flipper app with stack reports; return the call graph path."""
+    database = json.loads((application / ".vscode/compile_commands.json").read_text())
+    entry = next((item for item in database if item["file"].endswith("airrounds.cpp")), None)
+    if entry is None:
+        raise SystemExit("airrounds.cpp is missing from the Flipper compilation database")
+    arguments = entry.get("arguments") or shlex.split(entry["command"])
+    arguments[arguments.index("-o") + 1] = str(output / "airrounds.o")
+    output.mkdir(parents=True, exist_ok=True)
+    run([*arguments, "-fstack-usage", "-fcallgraph-info=su"], None, cwd=entry["directory"])
+    return output / "airrounds.ci"
 
 
 def main():
@@ -92,12 +109,15 @@ def main():
             libraries += ["--library", ROOT / "firmware/esp32/session"]
         if name == "airrounds_uart":
             libraries += ["--library", ROOT / "firmware/esp32/uart", *firmware_metadata(environment)]
-        run([cli, "compile", "--fqbn", fqbn, *libraries,
-             "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
-             "--build-property", "tools.esptool_py.cmd=esptool.py",
-             "--build-path", ROOT / "build/embedded" / name,
-             "--output-dir", destination, sketch], environment)
+        compiled = run([cli, "compile", "--fqbn", fqbn, *libraries,
+                        "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
+                        "--build-property", "tools.esptool_py.cmd=esptool.py",
+                        "--build-path", ROOT / "build/embedded" / name,
+                        "--output-dir", destination, sketch], environment, capture=True)
         verify_image(destination / (name + ".ino.bin"), environment)
+        if name == "airrounds_uart":
+            memory.esp32_memory(compiled.stdout, ROOT / "build/embedded" / name / "sketch" /
+                                (name + ".ino.cpp.su"))
         # Review project code with the actual SDK defines/include paths. These two
         # upstream Arduino header diagnostics are outside AirRounds' source scope.
         run([tool("cppcheck"), *cppcheck_flags,
@@ -119,6 +139,8 @@ def main():
          f"--suppress=missingInclude:{FLIPPER / 'ufbt/current/sdk_headers'}/*",
          f"--suppress=comparePointers:{FLIPPER / 'ufbt/current/sdk_headers/f7_sdk/lib/cmsis_core/cmsis_gcc.h'}"],
         environment)
+    memory.flipper_stack(flipper_callgraph(application, ROOT / "build/embedded/flipper-stack"),
+                         application / "application.fam")
     print(f"Embedded build artifacts: {OUTPUT}")
 
 

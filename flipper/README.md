@@ -82,15 +82,20 @@ before offering a new Start or Stop. **Command unconfirmed** means the app
 is still checking what happened. **Last result** shows the latest confirmed
 result available to the app, including after a board restart.
 
+A slow microSD card can block the app while it saves the profile. The app
+records when each UART byte arrives, so a board reply that arrived in time
+still counts after the save.
+
 [Design and prototype][design] · [UART protocol][uart]
 
 ## Test without a device
 
 Run `python3 tests/flipper/run_ui_emulator.py` from the repository root.
-The headless emulator runs the native app source with simulated Flipper
+It builds with the LLVM from the [quality check setup][quality] and fails on
+a memory leak. The headless emulator runs the native app source with simulated Flipper
 services. It uses the AirRounds board protocol and scheduler with a fake
 receiver. It covers scan cancellation, five-point selection, Stop, retry,
-profile reload, UART recovery, and older board firmware. It does not run
+profile reload, slow profile saves, UART recovery, and older board firmware. It does not run
 the ARM package or open a USB port.
 
 [sdk]: ../docs/t0.md#flipper-zero
@@ -98,3 +103,4 @@ the ARM package or open a USB port.
 [scan-flow]: ../docs/ui-ux/scan-flow.md
 [design]: ../docs/ui-ux/requirements.md
 [uart]: ../docs/uart.md
+[quality]: ../docs/quality.md#install-the-host-tools

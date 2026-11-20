@@ -5,7 +5,10 @@
 #include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <dirent.h>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -14,12 +17,22 @@
 #include <limits>
 #include <string>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 using namespace airrounds::storage;
 
 namespace {
+
+#if defined(__SANITIZE_THREAD__)
+constexpr bool threadSanitizer = true;
+#elif defined(__has_feature)
+constexpr bool threadSanitizer = __has_feature(thread_sanitizer);
+#else
+constexpr bool threadSanitizer = false;
+#endif
 
 const uint8_t first[] = {1, 2, 3, 4};
 const uint8_t second[] = {5, 6};
@@ -30,6 +43,50 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+// The group that is running, named by the watchdog if the group does not finish in time.
+char runningGroup[64] = "argument check";
+size_t groupsPassed = 0;
+
+} // namespace
+
+// Plain C and async-signal-safe calls only.
+extern "C" void reportStuckGroup(int /*signal*/) {
+    static const char prefix[] = "watchdog: this test group did not finish in time: ";
+    size_t length = 0;
+    while (runningGroup[length] != '\0') {
+        ++length;
+    }
+    write(STDERR_FILENO, prefix, sizeof(prefix) - 1);
+    write(STDERR_FILENO, runningGroup, length);
+    write(STDERR_FILENO, "\n", 1);
+    _exit(EXIT_FAILURE);
+}
+
+namespace {
+
+// Runs one test group; the watchdog fails it, by name, after `seconds`.
+template <typename Group> void runGroup(const char* name, Group group, unsigned seconds = 30) {
+    snprintf(runningGroup, sizeof(runningGroup), "%s", name);
+    alarm(seconds);
+    group();
+    alarm(0);
+    ++groupsPassed;
+}
+
+// Each run needs new file names, so the binary refuses a missing, unusable, or used directory.
+void requireEmptyDirectory(int argc, char** argv) {
+    DIR* directory = argc == 2 ? opendir(argv[1]) : nullptr;
+    bool empty = directory != nullptr;
+    for (const dirent* entry = empty ? readdir(directory) : nullptr; entry != nullptr && empty;
+         entry = readdir(directory)) {
+        empty = strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0;
+    }
+    if (directory != nullptr) {
+        closedir(directory);
+    }
+    require(empty, "pass an empty temporary directory");
 }
 
 struct TestFile {
@@ -113,7 +170,7 @@ void testHardErrorAndInvalidCount() {
     require(fullQueue.enqueue(first, sizeof(first)) == EnqueueStatus::queued, "queue block");
     full.writeLimit = 0;
     full.error = ENOSPC;
-    require(fullQueue.drainOne() == WriteStatus::io_error && full.lastError() == ENOSPC,
+    require(fullQueue.drainOne() == WriteStatus::io_error && full.contents.empty(),
             "surface a full-card error");
     full.writeLimit = sizeof(first);
     require(fullQueue.drainOne() == WriteStatus::io_error && full.calls == 1,
@@ -224,16 +281,158 @@ void testFileSizeLimit(const std::string& directory) {
     require(input.tellg() == 0, "the queue must not retry even after the limit is lifted");
 }
 
+void testBytesAccepted() {
+    TestFile file;
+    WriteQueue<2, 4, TestFile> queue(file);
+    require(queue.enqueue(first, sizeof(first)) == EnqueueStatus::queued &&
+                queue.enqueue(second, sizeof(second)) == EnqueueStatus::queued,
+            "queue two blocks");
+    file.writeLimit = 3;
+    require(queue.drainOne() == WriteStatus::partial && queue.bytesWritten() == 0 &&
+                queue.bytesAccepted() == 3,
+            "count the accepted prefix of the front block");
+    require(queue.drainOne() == WriteStatus::complete && queue.bytesWritten() == 4 &&
+                queue.bytesAccepted() == 4,
+            "count a completed block once");
+    // drainOne consumed the previous limit through its templated File reference.
+    // cppcheck-suppress redundantAssignment
+    file.writeLimit = 1;
+    require(queue.drainOne() == WriteStatus::partial && queue.bytesWritten() == 4 &&
+                queue.bytesAccepted() == 5,
+            "add the prefix of the next block");
+}
+
+void testOverflowCountSaturates() {
+    TestFile file;
+    WriteQueue<1, 1, TestFile> queue(file);
+    require(queue.enqueue(third, sizeof(third)) == EnqueueStatus::queued, "fill the queue");
+    for (uint64_t attempt = 0; attempt <= std::numeric_limits<uint32_t>::max(); ++attempt) {
+        queue.enqueue(third, sizeof(third));
+    }
+    require(queue.overflowCount() == std::numeric_limits<uint32_t>::max(),
+            "the overflow count stops at its maximum instead of wrapping");
+}
+
+void testFileNamesAndModes(const std::string& directory) {
+    SdFile file;
+    require(!file.openNew("") && file.lastError() == EINVAL && !file, "reject an empty file name");
+    require(!file.openNew(nullptr) && file.lastError() == EINVAL && !file,
+            "reject a missing file name");
+    require(!file.openRead((directory + "/absent").c_str()) && file.lastError() == ENOENT,
+            "surface a missing file on read");
+    require(!file.openRead(directory.c_str()) && !file, "refuse to read a directory");
+
+    const auto fifo = directory + "/fifo";
+    require(mkfifo(fifo.c_str(), 0600) == 0, "create a FIFO");
+    // A blocking open of a FIFO without a writer would hang here.
+    const unsigned watchdog = alarm(5);
+    const bool opened = file.openRead(fifo.c_str());
+    alarm(watchdog);
+    require(!opened && !file, "refuse to read a FIFO without blocking");
+
+    const auto path = directory + "/mode.pcap";
+    const mode_t mask = umask(0); // Check the requested mode, not the caller's umask.
+    const bool created = file.openNew(path.c_str());
+    umask(mask);
+    require(created && static_cast<bool>(file), "create a file");
+    struct stat info{};
+    require(stat(path.c_str(), &info) == 0 &&
+                (static_cast<unsigned>(info.st_mode) & 0777U) == 0600U,
+            "create files readable only by the owner");
+    errno = ENOENT;
+    require(file.write(first, sizeof(first)) == sizeof(first) && file.lastError() == 0,
+            "a successful write clears the error code");
+    require(file.close() && !file && file.close(), "closing twice is harmless");
+}
+
+void testCloseFailure(const std::string& directory) {
+    const auto path = directory + "/close.pcap";
+    std::ofstream(path) << "x";
+    // Single-threaded here: no other thread can take or close the descriptor number in between.
+    const int spare = ::open(path.c_str(), O_RDONLY);
+    require(spare >= 0 && ::close(spare) == 0, "find the lowest free descriptor");
+    SdFile file;
+    require(file.openRead(path.c_str()), "open the file on that descriptor");
+    struct stat byDescriptor{};
+    struct stat byPath{};
+    require(fstat(spare, &byDescriptor) == 0 && stat(path.c_str(), &byPath) == 0 &&
+                byDescriptor.st_ino == byPath.st_ino && byDescriptor.st_dev == byPath.st_dev,
+            "the file uses the lowest free descriptor");
+    // The file reopened the closed descriptor number, so this closes the file's descriptor.
+    // cppcheck-suppress doubleFree
+    require(::close(spare) == 0, "close the descriptor behind the file");
+    require(!file.sync(), "report a failed sync");
+    require(!file.close() && !file, "report a failed close");
+}
+
+void testDescriptorZero(const std::string& directory) {
+    const auto path = directory + "/zero.pcap";
+    const int input = dup(0); // Fails only when standard input is already closed.
+    require(input < 0 || ::close(0) == 0, "free descriptor zero");
+    SdFile file;
+    const bool opened = file.openNew(path.c_str());
+    struct stat byDescriptor{};
+    struct stat byPath{};
+    const bool onZero = fstat(0, &byDescriptor) == 0 && stat(path.c_str(), &byPath) == 0 &&
+                        byDescriptor.st_ino == byPath.st_ino;
+    const bool usable = static_cast<bool>(file);
+    const bool closed = file.close();
+    require(input < 0 || (dup2(input, 0) == 0 && ::close(input) == 0), "restore standard input");
+    require(opened && onZero, "open a file on descriptor zero");
+    require(usable && closed, "descriptor zero is an open file");
+}
+
+void testProbePublishRemove(const std::string& directory) {
+    const auto from = directory + "/from";
+    const auto to = directory + "/to";
+    std::ofstream(from) << "new";
+    std::ofstream(to) << "old";
+    require(SdFile::probe(from.c_str()) == FilePresence::present &&
+                SdFile::probe((directory + "/none").c_str()) == FilePresence::missing &&
+                SdFile::probe(directory.c_str()) == FilePresence::error &&
+                SdFile::probe((from + "/inner").c_str()) == FilePresence::error,
+            "classify regular, missing, and unusable paths");
+    require(!SdFile::publish(from.c_str(), to.c_str()), "never replace a published file");
+    std::ifstream kept(to);
+    require(std::string(std::istreambuf_iterator<char>(kept), {}) == "old" &&
+                SdFile::probe(from.c_str()) == FilePresence::present,
+            "a refused publish keeps both files");
+    SdFile::remove(to.c_str());
+    require(SdFile::probe(to.c_str()) == FilePresence::missing, "remove a file");
+    require(SdFile::publish(from.c_str(), to.c_str()) &&
+                SdFile::probe(from.c_str()) == FilePresence::missing &&
+                SdFile::probe(to.c_str()) == FilePresence::present,
+            "publish renames the staged file");
+    require(!SdFile::publish(from.c_str(), (directory + "/again").c_str()),
+            "publishing a missing file fails");
+}
+
 } // namespace
 
 // NOLINTNEXTLINE(bugprone-exception-escape): Allocation failure must fail this host test.
 int main(int argc, char** argv) {
-    require(argc == 2, "pass an empty temporary directory");
-    testOverflowAndWrap();
-    testPartialAndZeroWrite();
-    testHardErrorAndInvalidCount();
-    testProducerDuringWrite();
-    testOpenFailureAndExclusiveCreate(argv[1]);
-    testFileSizeLimit(argv[1]);
-    std::cout << "SD writer: 6 groups passed\n";
+    signal(SIGALRM, reportStuckGroup);
+    requireEmptyDirectory(argc, argv);
+    runGroup("testOverflowAndWrap", testOverflowAndWrap);
+    runGroup("testPartialAndZeroWrite", testPartialAndZeroWrite);
+    runGroup("testHardErrorAndInvalidCount", testHardErrorAndInvalidCount);
+    runGroup("testProducerDuringWrite", testProducerDuringWrite);
+    runGroup("testOpenFailureAndExclusiveCreate",
+             [&] { testOpenFailureAndExclusiveCreate(argv[1]); });
+    runGroup("testFileSizeLimit", [&] { testFileSizeLimit(argv[1]); });
+    runGroup("testBytesAccepted", testBytesAccepted);
+    size_t skipped = 0;
+    if (threadSanitizer) {
+        // ThreadSanitizer makes four billion atomic updates take minutes.
+        std::cout << "SD writer: skipped testOverflowCountSaturates under ThreadSanitizer\n";
+        ++skipped;
+    } else {
+        // About 2 s at -O1 and 100 s in an -O0 AddressSanitizer build.
+        runGroup("testOverflowCountSaturates", testOverflowCountSaturates, 600);
+    }
+    runGroup("testFileNamesAndModes", [&] { testFileNamesAndModes(argv[1]); });
+    runGroup("testCloseFailure", [&] { testCloseFailure(argv[1]); });
+    runGroup("testDescriptorZero", [&] { testDescriptorZero(argv[1]); });
+    runGroup("testProbePublishRemove", [&] { testProbePublishRemove(argv[1]); });
+    std::cout << "SD writer: " << groupsPassed << " groups passed, " << skipped << " skipped\n";
 }

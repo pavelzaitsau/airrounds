@@ -1,7 +1,9 @@
 # AirRounds on Flipper Zero
 
 AirRounds runs passive Wi-Fi diagnostics on one saved profile with up to three
-approved 2.4 GHz access points. Flipper starts and stops the session. The
+approved 2.4 GHz access points. This page describes that manual profile flow.
+Boards with the scan feature use the [scan workflow](scan-flow.md) with up to
+five points. Flipper starts and stops the session. The
 ESP32-S2 Devboard runs it and saves files to its own microSD. The operator checks
 those files on a Mac after the session. One point is useful for bench tests.
 [Project plan][plan] · [Architecture][architecture]
@@ -18,7 +20,9 @@ Each session keeps its own copy of the point list.
 
 The [native Flipper app](../../flipper/README.md) implements this flow. Its
 result labels use the outcomes that the Devboard sends. The file details
-use the UART protocol's real file name instead of the demo path.
+use the UART protocol's real file name instead of the demo path. The tables
+below list the app's labels. The prototype keeps its earlier labels, such as
+`Saved` and `No sample`.
 
 ## Try the prototype
 
@@ -117,13 +121,14 @@ wait for the board before offering a new command.
 | --- | --- | --- |
 | Waiting for the Start reply | `Starting...` / `Waiting for board` | — |
 | Board confirms the current point | `Observing` / `Point 2 / Ch 6` | `Stop` |
-| Board is saving one point and the session may continue | `Saving point` / `Point 2` | `Stop` if the board supports it during point saving |
+| Board is saving one point and the session may continue | `Saving point` / `Point 2 / Ch 6` | `Stop` if the board supports it during point saving |
 | Waiting for the Stop reply | `Stopping...` / `Waiting for board` | — |
 | Board stopped receiving and is finishing the session | `Reception stopped` / `Saving to board SD` | — |
-| Reply lost and status is being read | `Checking status` / `Command unconfirmed` | `Refresh` after automatic recovery ends, if available |
+| Reply lost and status is being read | `Checking status` / `Command unconfirmed` | — |
+| Board rejected the Start or Stop | `Start rejected` or `Stop rejected` / `Session status updated` | `Refresh` |
 | Lost UART during an active session | `Link lost` / `Session may run` / `Check cable` | — |
 | Link restored, board state still unknown | `Checking status` / `Waiting for board` | — |
-| Board boot ID changed during a known session | `Devboard restarted` / `Check board SD` | `Results` if confirmed results are available |
+| Board boot ID changed during a known session | `Devboard restarted` / `Check board SD` | `Last result` |
 | Terminal board state | `Session ended`, `Session stopped`, `SD write failed`, or `Radio failed` | `Results` if results are available |
 
 Stop ends the session after the board safely finishes any current write.
@@ -135,23 +140,26 @@ another Start or Stop. [UART v1][uart] · [Project plan][plan]
 ## Results and files
 
 Show the session outcome separately from the number of saved points.
-`Session ended` with `1 of 3 saved` is a valid result.
+`Session ended` with `1 of 3 captured` is a valid result.
 
 | Point outcome | List | Details |
 | --- | --- | --- |
-| `saved` | `Saved` | `Saved to board SD`. The board confirmed the file. |
+| `saved` | `Captured` | `Captured to board SD`. The board confirmed the file. |
 | `not_observed` | `Not seen` | `Point not seen` during the visit. |
-| `no_usable_sample` | `No sample` | `No usable sample`. The board observed the point and found no usable sample. |
-| `stopped` | `Stopped` | `Stopped before result`. |
+| `radio_error` | `Radio error` | `Radio error`. |
 | `storage_error` | `SD error` | `SD write failed`. |
-| `incomplete` | `Incomplete` | `Incomplete file`. Exclude it from the saved count. |
-| Missing status | `Unknown` | `Result unavailable`. |
+| No result after Stop | `Stopped` | `Stopped before result`. |
+| No result after an error | `Skipped` | `Skipped after error`. |
 
-OK opens the selected point. Show the full BSSID and channel. For a saved
-point, Right opens the file path when the board confirms it. Use numbered
-pages for a path that is too long for one screen. If the path is unknown,
-show `File path unavailable` and `Check board SD`. The Mac checks files
-independently after the session. [Project plan][plan]
+Only `Captured` counts toward the captured total. The scan workflow's
+**Beacons** list labels a verified beacon file `Saved`.
+
+OK opens the selected point. The manual flow shows the full BSSID and
+channel. The scan workflow shows the network name. `Address unavailable`
+replaces them when the session's point list lacks the point. For a captured
+point, Right opens `Board SD file`. The file name sits at the card root and
+fills three lines: `visit-`, the boot ID, and the rest of the name. The Mac
+checks files independently after the session. [Project plan][plan]
 
 ## T6 board data and bench checks
 

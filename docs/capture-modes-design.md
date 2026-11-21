@@ -165,11 +165,17 @@ the mode is built. A mode without an entry stays unavailable.
 - Identifiers: list the addresses and fields that reach the PCAP, the
   journal, and the Flipper screen. Client MAC addresses never reach the
   screen.
-- Payload: state that the mode decrypts nothing and saves no handshake or key
-  material. Handshake and key capture are outside the product.
+- Target: confirm that the mode drops every frame whose BSSID is not the
+  access point it is visiting, as Beacon does in `PassiveSession::receive`.
+- Payload: state that the mode decrypts nothing and derives no key. A mode may
+  save handshake frames on an own or permitted network, for research use,
+  receive-only, and with no decryption. It saves only the raw frame bytes. Raw
+  handshake frames carry key-derived values, so the entry states how
+  [acceptable use](acceptable-use.md#capture-modes-in-scope) treats them.
 - Evidence: define what the Mac checks for a success. For an absence mode,
   define the evidence of absence; see [Open questions](#open-questions).
-- Legal basis: an own network, or a network whose owner permits the test.
+- Legal basis: an own network, or a network whose owner permits the test in
+  writing, under the scope and limits in [acceptable use](acceptable-use.md).
 
 ## Invariants
 
@@ -183,6 +189,10 @@ relies on.
 - `onFrame` runs under `receiveLock_` in the Wi-Fi callback. A mode that
   needs work outside the callback gets a `poll` call with step R6, not
   callback time.
+
+A future mode may capture handshake frames under the four limits in
+[acceptable use](acceptable-use.md). The no-transmit and `WIFI_MODE_NULL`
+invariants above hold for such a mode too.
 
 ## Implementation steps
 

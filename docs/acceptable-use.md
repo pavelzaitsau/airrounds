@@ -1,0 +1,312 @@
+# AirRounds acceptable use and licensing
+
+AirRounds is a personal, defensive Wi-Fi security tool for noncommercial
+research. Its author uses it to assess the security of networks the author owns
+or has written permission to test. The author also measures the risk that
+attacker-class tools pose to those networks. AirRounds is not offered for use by
+anyone else. This document is the single source of truth for who may run
+AirRounds, where, and under which limits. Every other document defers to it.
+
+In this document, the author is the copyright holder that [NOTICE](../NOTICE)
+names. The operator is whoever runs a session: the author, or anyone else
+outside the intended use.
+
+AirRounds is licensed under the PolyForm Noncommercial License 1.0.0. The full
+license text is in [LICENSE](../LICENSE), and the third-party components and
+their licenses are in [NOTICE](../NOTICE). The [Licensing](#licensing) section
+states what the noncommercial restriction covers.
+
+Read this before you build, flash, or run AirRounds. The operator carries full
+responsibility for every session.
+
+## Purpose
+
+AirRounds listens passively around the access points the operator chose. The
+round result on the Flipper and the session journal answer defensive questions
+about the operator's own networks:
+
+- Which frames do the operator's own access points expose to a passive listener.
+- How much an attacker with similar hardware could collect without transmitting.
+- Whether the operator's own access points behave as the operator expects.
+
+AirRounds is a measurement tool for the operator's own perimeter. It is not a
+product, a service, or a tool for use against networks the operator does not own
+or control.
+
+## Saved frames
+
+The firmware writes the frames a round accepts to the microSD card of the
+Devboard, as a PCAP file next to a session journal. This is how the device
+works. It is not a permission to keep frames.
+
+- This policy does not explicitly permit keeping frames for later analysis.
+- This policy does not prohibit keeping frames temporarily for a limited use
+  within one assessment of an own or permitted network.
+- Delete the frames when that assessment ends. See
+  [Data handling](#data-handling).
+
+The project provides no tool or instruction for post-processing saved frames,
+and does not encourage any. The Mac tool `tools/mac/check_pcap.py` checks a
+transferred capture. It verifies the file structure and the receipt. With
+`--bssid`, it confirms that the file holds a beacon from that access point and
+reports its SSID. Decryption and key derivation stay prohibited; see
+[Prohibited use](#prohibited-use).
+
+## Capture modes in scope
+
+The shipped capture is beacon frames only. The capture-mode contract lets the
+author add more advanced modes later, each under the same four limits below.
+See the [capture modes design](capture-modes-design.md#admission-checklist) for
+the contract and the admission checklist a new mode must pass.
+
+An example of an advanced mode is the capture of the EAPOL frames of the WPA
+4-way handshake. The shipped firmware has no such mode. Handshake capture shows
+what an attacker could collect toward an offline password-cracking attempt, so
+the operator can judge that risk on their own networks.
+
+Handshake and EAPOL capture, and every other advanced mode, is in scope only
+under all four limits below. The same limits bind every current and future mode.
+
+| Limit | Rule |
+| --- | --- |
+| Own or permitted networks | The mode captures only the round's approved access points, one to five BSSIDs, which the operator owns or has written permission to test. |
+| Research use | The capture is a test-only artefact for a security assessment. |
+| Receive-only | The radio stays in `WIFI_MODE_NULL`. The firmware has no transmit call, and no mode adds one. |
+| No decryption | A mode decrypts nothing and derives no key, PMK, PTK, PMKID, or passphrase. It saves only the raw frame bytes it receives. |
+
+A handshake mode captures a handshake only when a client joins on its own. It
+never forces a reconnect, because AirRounds never transmits. It does not crack a
+password, and the project provides nothing that does.
+
+Raw handshake frames contain key-derived values: EAPOL message 1 can carry the
+PMKID, and messages 2 to 4 carry the MIC. Either value allows an offline guess of
+the passphrase. Treat a handshake capture as being as sensitive as the passphrase
+itself.
+
+A handshake capture on an own or permitted network can record a client's MAC
+address and EAPOL frames. That client traffic is in scope because it belongs to
+the authorized target network. Client MAC addresses never reach the Flipper
+screen. Targeting a third party, or collecting their credentials, traffic, or
+location, stays prohibited.
+
+## Intended operator
+
+The author is the intended operator. The author runs AirRounds for personal,
+noncommercial research only, on a network the author owns or holds written,
+time-bounded permission from its owner to test. Anyone else who runs AirRounds
+does so outside its intended use. The same rules then bind them. They carry full
+responsibility for every session. This policy does not provide for use by an
+organization, including a noncommercial one. A paid assessment, a client
+engagement, or any other commercial use is prohibited by this policy, and for an
+individual it is also outside the license; see [Licensing](#licensing).
+
+The repository grants no permission to any third party to run AirRounds against
+any network. Possession of the source or a built image is not authorization.
+
+This policy states how AirRounds may be used. It does not add conditions to the
+license. The law and the network owner's permission bind the operator
+independently of the license.
+
+## Authorized perimeter
+
+AirRounds runs only inside a restricted, authorized perimeter: networks the
+operator owns, or networks whose owner has given the operator written permission
+to test, for the duration of that permission.
+
+| Target | Allowed |
+| --- | --- |
+| A network the operator owns | Yes |
+| A network whose owner gave written, time-bounded permission | Yes, within that scope |
+| Any other network | No |
+
+The operator confirms every approved access point is in scope before every
+round. During a Beacon capture, the firmware drops frames from any BSSID other
+than the access point it is visiting. Every new mode must do the same before it
+is admitted. That filter is a scope aid, not a legal boundary. The operator
+chooses the access points, so the operator owns the decision that they are in
+scope.
+
+### Scan
+
+A scan helps the operator find their own access points. During a bounded scan,
+the radio receives every management frame in range, including frames from
+networks and devices the operator does not own. The firmware keeps only beacons
+for the scan list and discards every other frame. The Flipper shows up to 16
+networks by name.
+
+- A scan writes no capture. Nothing from a scan reaches the Devboard microSD
+  card, and the Flipper app keeps the scan list in memory only.
+- A scan is a selection step only. Use it to find and select an own or permitted
+  access point, and for nothing else.
+- Do not select, record, or note a network from the scan list that is outside
+  the authorized perimeter.
+
+## Prohibited use
+
+The following are prohibited without exception. They hold even where the code or
+the hardware would technically allow them.
+
+- Running AirRounds against a network the operator does not own or is not
+  permitted in writing to test. This is the strictest rule, and nothing
+  overrides it.
+- Transmitting any frame, including deauthentication, beacon, or probe frames.
+  AirRounds is receive-only, and no mode adds a transmit path.
+- Decrypting captured traffic, or deriving a key, PMK, PTK, PMKID, or passphrase
+  from a capture. This includes an offline guess of the passphrase.
+- Capturing to collect another person's credentials, traffic content, or
+  location, or to track a device or a person.
+- Moving a capture to a device or service the operator does not control. See
+  [Data handling](#data-handling).
+- Any commercial use, including paid security assessments.
+
+## Technical safeguards
+
+Each safeguard below backs a line in the policy. Each claim names the source
+that proves it, so a reviewer can check the claim against the code.
+
+| Safeguard | Claim | Evidence |
+| --- | --- | --- |
+| Receive-only radio | The radio starts in `WIFI_MODE_NULL` with a promiscuous receive callback. The source adds no transmit path. | `PassiveVisit::openRadio` in `firmware/esp32/airrounds_uart/passive_visit.h`; [T9 security assurance gap](t9.md#security-assurance-gap) |
+| No transmit call | The firmware source holds no frame-transmit call such as `esp_wifi_80211_tx`. | A search of `firmware/esp32/` finds none; [capture modes design, Invariants](capture-modes-design.md#invariants) |
+| Build gate (planned, not built) | A planned host test fails the build when `firmware/esp32/**` contains a transmit call. The test does not exist yet. | [capture modes design, Future tests](capture-modes-design.md#future-tests) |
+| Declared frame types only | The receive filter and the PCAP writer pass only the frame types a mode declares. | `PassiveVisit::receiveFilter` in `passive_visit.h`; `writePcapRecords` in `firmware/esp32/storage/pcap_record.h` |
+| Visited access point only | Beacon drops every frame whose BSSID is not the access point it is visiting. | `PassiveSession::receive` in `firmware/esp32/session/passive_session.h`; [admission checklist](capture-modes-design.md#admission-checklist) for new modes |
+| Scan writes no capture | A scan keeps beacons for the scan list and never mounts the microSD card. | `PassiveVisit::startScan`, `pollScan`, and `finishScan` in `passive_visit.h` |
+
+## Known limits
+
+The no-transmission property rests on the source today, not on radio measurement
+or an automated gate. State the limits plainly, and do not overclaim.
+
+- The independent RF measurement that would confirm radio silence on the bench is
+  deferred. Until it runs, the no-transmission property rests on the source alone.
+  See [T9 security assurance gap](t9.md#security-assurance-gap).
+- The build gate that would fail the build on a transmit call is planned, not
+  built. Until it exists, manual source review is the only check. See
+  [capture modes design, Future tests](capture-modes-design.md#future-tests).
+- The access point filter is a scope aid, not an enforced legal boundary. The
+  operator selects the access points, so the operator is accountable for the
+  choice.
+- A capture holds the raw frames it accepts. A beacon capture holds broadcast
+  beacon data. A handshake capture also holds client MAC addresses and
+  key-derived values that allow an offline guess of the passphrase. Treat every
+  capture as sensitive. See [Data handling](#data-handling).
+
+## Data handling
+
+A capture can identify devices and, through them, people. Handle it as sensitive
+data.
+
+- Keep captures only on the Devboard microSD card and on devices the operator
+  controls, such as the operator's Mac. Do not upload a capture to a service or
+  share it with anyone else.
+- Keep captures only until the assessment they belong to ends, then delete them.
+- Do not use a capture to identify, track, or profile a device or a person.
+
+## Operator responsibility
+
+The operator carries full responsibility for every session: the choice of
+target, the legal basis for the test, the handling of the captured data, and
+compliance with the law that applies to them. The
+[disclaimer](../README.md#disclaimer) in the README applies to AirRounds and
+every use of it.
+
+Follow all applicable laws on interception, privacy, and radio emission.
+
+When the law and this policy disagree, the stricter rule wins.
+
+## Licensing
+
+AirRounds is released under the PolyForm Noncommercial License 1.0.0. The
+license lets you use, study, modify, and share it for any noncommercial purpose,
+and it also permits use by the noncommercial organizations it lists, such as
+charities and educational institutions. This policy is narrower: it provides for
+the author's own research only. Commercial use is not permitted, except for the
+components that [NOTICE](../NOTICE) lists under their own terms.
+
+This document is not legal advice. For a commercially important decision, have a
+lawyer confirm it.
+
+| File | Owns |
+| --- | --- |
+| [LICENSE](../LICENSE) | The full PolyForm Noncommercial License 1.0.0 text and the required notice |
+| [NOTICE](../NOTICE) | Every third-party or separately licensed component, its source, its license, and the full license text or the path of a tracked copy |
+| [CONTRIBUTING](../CONTRIBUTING.md) | The license under which the project accepts contributions |
+| This document | The use policy and the limits of the noncommercial restriction |
+
+Keep the required notice with every copy you distribute:
+
+```text
+Required Notice: Copyright 2026 Pavel Zaitsau
+```
+
+### What the noncommercial restriction covers
+
+The PolyForm Noncommercial restriction applies to the original AirRounds code.
+It does not override the license of a component listed in [NOTICE](../NOTICE).
+Each such component keeps its own license.
+
+The PolyForm license does not stop the copyright holder from offering AirRounds
+under other terms later, such as a commercial or an open-source license. To keep
+that option, external contributions come in under MIT-0; see
+[CONTRIBUTING](../CONTRIBUTING.md).
+
+PolyForm Noncommercial is not an OSI-approved open-source license. It carries a
+field-of-use restriction, so AirRounds does not qualify as open source, and some
+directories and package indexes reject it.
+
+### Distribution
+
+The project distributes source code only. It publishes no built Flipper app
+(`.fap`) and no built firmware image (`.bin`). The author builds both for
+personal use.
+
+A build links platform code under other licenses: the Flipper Zero firmware SDK
+(GPL-3.0), Arduino-ESP32 (LGPL-2.1), and ESP-IDF (Apache-2.0). The source
+repository does not contain that code. Do not publish a built image. Publishing
+one needs a separate license review first, because the image combines AirRounds
+code with that platform code.
+
+### Adding third-party code
+
+The rules in this section apply to code built into the firmware, the Flipper
+app, the Mac tools, or the tests. The development skills under `.agents/skills/`
+are separate tooling with their own licenses, listed in [NOTICE](../NOTICE), and
+are never combined with AirRounds code.
+
+AirRounds can take third-party code under a permissive license, such as MIT,
+BSD, or Apache-2.0. A permissive license allows redistribution inside a project
+with more restrictive terms, so the noncommercial restriction stays valid for the
+AirRounds code around it.
+
+Do not add code under GPL or another strong copyleft license. GPL-3.0 section 10
+forbids any further restriction on a derivative work. GPL code makes the
+noncommercial restriction impossible for the whole program it is combined into.
+
+When you add permissive third-party code, do all of the following in the same
+change:
+
+1. Add an entry to [NOTICE](../NOTICE) with the component, its source, its
+   license, and the full license text or the path of a tracked copy.
+1. Keep the upstream copyright line and license text in the copied files.
+   Removing them breaks the upstream license condition.
+1. Mark each copied file with an SPDX identifier, as the next section shows.
+1. For Apache-2.0 code, mark every file you change as changed, and copy the
+   attributions from the upstream `NOTICE` file, if it has one, into
+   [NOTICE](../NOTICE).
+
+A file that mixes upstream code with original AirRounds code is a mixed-license
+file. The upstream lines keep their license. Your new lines are under PolyForm
+Noncommercial. Marking such a file with the upstream license alone licenses your
+additions under that license, which defeats the noncommercial restriction.
+
+### SPDX identifiers
+
+Add an SPDX identifier to every new source file. Existing source files carry no
+identifier yet; the root [LICENSE](../LICENSE) covers them.
+
+| File | Identifier |
+| --- | --- |
+| Original AirRounds code | `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` |
+| Unmodified third-party code | The upstream identifier, for example `SPDX-License-Identifier: MIT`, with the upstream copyright line |
+| Third-party code with AirRounds changes | Both identifiers, for example `SPDX-License-Identifier: MIT AND PolyForm-Noncommercial-1.0.0`, with the upstream copyright line and a header that says which lines are under which license |

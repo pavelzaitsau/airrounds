@@ -10,7 +10,7 @@ those files on a Mac after the session. One point is useful for bench tests.
 
 ## Approved design
 
-The operator chose **option A**. Start from the main menu, keep one saved
+The author chose **option A**. Start from the main menu, keep one saved
 profile, and use short English labels. Show the full BSSID and channel for every
 point before starting. The profile uses fixed labels such as `Point 1`.
 Each session keeps its own copy of the point list.

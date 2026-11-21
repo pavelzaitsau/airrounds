@@ -26,8 +26,7 @@ Run the Python tests on their own from the repository root.
 python3 -m unittest discover -s tests -t . -p "test_*.py"
 ```
 
-See the [Mac tool guide](../tools/mac/README.md) for the T3 samples and
-the independent `tcpdump` check.
+See the [Mac tool guide](../tools/mac/README.md) for the T3 samples.
 
 ## SD writes and PCAP finalization
 
@@ -71,9 +70,9 @@ files that differ from the expected size.
 
 Build the USB bench image with `make embedded`. The image is under
 `artifacts/quality/esp32/airrounds_passive_smoke/`. Use an ESP32-S2 Wi-Fi
-Devboard, a microSD card, and the SPI adapter with CS on GPIO 10. Keep a
-backup of the current flash before loading the bench image. The SPI pinout
-is in the board's adapter wiring guide.
+Devboard, a microSD card, and the SPI adapter. The firmware uses SCK on
+GPIO 36, MISO on GPIO 37, MOSI on GPIO 35, and CS on GPIO 10. Keep a
+backup of the current flash before loading the bench image.
 
 Open the USB serial port at 115200 baud. Send each command with a newline.
 Use the name of an approved access point in `FIND`. Use its BSSID and
@@ -105,11 +104,10 @@ with the values from the visit.
 ```sh
 python3 tools/mac/check_pcap.py visit.pcap \
   --receipt visit.pcap.ok --bssid 02:00:00:00:00:01
-tcpdump -nn -e -r visit.pcap
 ```
 
-The checker should report one record and a matching receipt. Inspect the
-beacon's source, BSSID, and advertised channel in the `tcpdump` output.
+The checker should report one record, a matching receipt, and a beacon from
+the requested BSSID.
 
 The November 18, 2026 host run saved an 87-byte synthetic capture.
 The Mac checker verified its receipt. `tcpdump` read one Lab beacon
@@ -129,7 +127,6 @@ connected.
 
 We sent `info` from the Mac through the Flipper USB-to-UART bridge.
 The bridge used 115200 baud, with Flipper pin 13 for TX and pin 14 for RX.
-
 
 ## UART protocol
 

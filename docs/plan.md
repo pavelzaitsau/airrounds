@@ -1,9 +1,8 @@
 # AirRounds development plan
 
-This plan covers passive diagnostics. It draws on the
-November 18, 2026 project plan.
-Both toolchains are installed and produced test `.bin` and `.fap` files.
-See the [T0 report](t0.md) for the results and open checks.
+This plan covers passive diagnostics. Both toolchains are installed and
+produced test `.bin` and `.fap` files. See the [T0 report](t0.md) for the
+results and open checks.
 
 ## Bench and first release
 
@@ -26,9 +25,9 @@ See the [T0 report](t0.md) for the results and open checks.
   ESP32 source, and the previously installed image. In T0, record exact
   revisions and working tree states. Identify the installed image and check SDK
   compatibility.
-- Earlier builds used Arduino ESP32 core 2.0.11 and a Flipper-specific build
-  target. Match the Flipper SDK to its firmware. Confirm tools and commands
-  in T0.
+- Earlier builds of the preinstalled board firmware used Arduino ESP32 core
+  2.0.11 and a Flipper-specific build target. Match the Flipper SDK to its
+  firmware. Confirm tools and commands in T0.
 - Eighteen earlier tests passed with stand-ins. One test used the real write
   module and a mock SD card. A full write saved 4 of 4 bytes, a failed open
   saved 0, and a short write saved 2. The module cleared the buffer in all
@@ -120,7 +119,7 @@ the limits and what happens when a visit uses its time.
 | T6: Up to three access points | T5b | Test zero, one, and three points, shared and distinct channels, loss or channel change, no traffic, and completion of all visits. |
 | T8: Observation windows | T6 | Limit extensions, ignore repeated observations, serve other points fairly, and enforce the absolute deadline. |
 | [T9: Hardware acceptance](t9.md) | T8 | Closed for the original beacon criteria. The report records the deferred checks and the later scan workflow evidence. |
-| [T10: Capture modes](t10.md) | T9 | Closed. Add the **Capture mode** choice with Beacon and two reserved placeholders. Move Beacon behind a mode contract in the firmware and the app, with per-mode frame types and frame chains; see the [design](capture-modes-design.md). Reserve the protocol fields in documentation only. Support any capture type on own networks for research purposes. Acceptance: the requirement, the mockup with its own test, the design, Beacon unchanged in the existing host tests and on hardware, and the menu checks in the UI emulator. |
+| [T10: Capture modes](t10.md) | T9 | Closed. Add the **Capture mode** choice with Beacon and two reserved placeholders. Move Beacon behind a mode contract in the firmware and the app, with per-mode frame types and frame chains; see the [design](capture-modes-design.md). Reserve the protocol fields in documentation only. Any future mode stays within the four limits in [acceptable use](acceptable-use.md#capture-modes-in-scope). Acceptance: the requirement, the mockup with its own test, the design, Beacon unchanged in the existing host tests and on hardware, and the menu checks in the UI emulator. |
 
 ## Bench checks and handoff
 

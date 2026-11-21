@@ -56,9 +56,9 @@ python3 tests/fixtures/pcap_samples.py "$sample_dir"
 for sample in valid truncated damaged unsupported; do
   python3 tools/mac/check_pcap.py "$sample_dir/$sample.pcap"
 done
-tcpdump -nn -e -r "$sample_dir/valid.pcap"
 ```
 
-The checker reports the result named by each file. On macOS arm64,
-`tcpdump` 4.99.1 opened the valid file and showed one beacon. The beacon
-has SSID `AirRounds`, BSSID `02:00:00:00:00:01`, and channel 6.
+The checker reports the result named by each file. `make check` also opens
+the synthetic captures with `tcpdump`, to confirm that a second tool reads the
+same format. The project gives no instruction to inspect real captures with
+other tools; see [saved frames](../../docs/acceptable-use.md#saved-frames).

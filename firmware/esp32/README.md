@@ -1,5 +1,8 @@
 # ESP32-S2 Wi-Fi Devboard
 
+Read [acceptable use](../../docs/acceptable-use.md) before you build or flash
+the firmware.
+
 The storage writer writes blocks to a new file on a mounted microSD card.
 The [toolchain example](../../tests/toolchain/esp32/airrounds_storage_smoke)
 connects the writer to the Arduino SD library. The current radio workflow

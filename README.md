@@ -1,29 +1,49 @@
 # AirRounds
 
-AirRounds is a passive Wi-Fi diagnostic tool for Flipper Zero and the ESP32-S2
-Wi-Fi Devboard. Scan for nearby networks and run a round on one to five approved
-2.4 GHz access points. Use Flipper to select networks and view the results. ESP32 saves beacons to
-microSD. Use a Mac to check the files after transfer.
+AirRounds is a passive, receive-only Wi-Fi capture tool for Flipper Zero and the
+ESP32-S2 Wi-Fi Devboard. It saves one beacon from each approved 2.4 GHz access
+point it observes, one to five per round, to microSD. Each beacon goes in its
+own PCAP file with a receipt, and a session log records the round. The source
+has no transmit, deauthentication, decryption, or key-derivation path. No RF
+measurement or automated gate confirms the absence of transmission yet; see
+[known limits](docs/acceptable-use.md#known-limits).
 
-| Directory | What it does |
-| --- | --- |
-| `firmware/esp32/` | Receives data, tracks the session, and writes to microSD |
-| `flipper/` | Selects access points, controls the session, and shows results |
-| `tools/mac/` | Checks the PCAP files and session log |
-| `tests/` | Holds host tests and synthetic inputs |
-| `docs/` | Describes the components, development steps, and acceptance checks |
+AirRounds is a personal project for the author's own noncommercial security
+research. The author runs it only on networks the author owns or has written
+permission to test. The author does not offer it as a product or for use by
+anyone else.
 
-T0 starts with the source revisions and build tools. See the
-[development plan](docs/plan.md), [component map](docs/architecture.md), and
-[tool setup](docs/development.md). See the [scan workflow and mockup](docs/ui-ux/scan-flow.md) and the
-[capture modes](docs/ui-ux/capture-modes.md).
+| Component | Language | Directory |
+| --- | --- | --- |
+| Devboard firmware | C++ | `firmware/esp32/` |
+| Flipper app | C++ | `flipper/` |
+| Mac file checker | Python | `tools/mac/` |
+| Host tests and UI emulator | C++, Python | `tests/` |
 
-## Quality checks and project skills
+Run `make check` for the host quality gate. `make embedded` builds and checks
+the device images. See [quality checks](docs/quality.md) and
+[architecture](docs/architecture.md).
 
-Run `make check` for formatting, static analysis, host tests, and sanitizers.
-Run `make embedded` with the T0 SDKs to build and analyze the ESP32 and Flipper
-examples. See [quality checks](docs/quality.md) for setup, scope, and limitations.
+## Disclaimer
 
-Project skills live in [`.agents/skills/`](.agents/skills). They include the seven
-Copydesk skills and the Trail of Bits `harness-writing`, `libfuzzer`, and
-`sharp-edges` skills. Open a skill's `SKILL.md` for its workflow and requirements.
+To the maximum extent permitted by law, the author provides AirRounds "as is",
+without any warranty or condition of any kind. The author and the contributors
+accept no liability under any legal theory, including contract, tort, and
+negligence. The exclusion covers any damage, loss, legal consequence, or other
+harm from the software, its documentation, or any use of them.
+
+Anyone who builds, modifies, flashes, runs, or distributes AirRounds does so at
+their own risk. That person alone is responsible for every session they run.
+That responsibility covers the choice of target, the legal basis for the test,
+the handling of captured data, and compliance with the law. Nothing in this
+repository authorizes anyone to test any network, and nothing in it is legal
+advice. Many jurisdictions restrict the capture of wireless traffic, and capture
+without authorization can be a crime.
+
+## License
+
+AirRounds is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Commercial use is not
+permitted. The license permits more than the intended use;
+[acceptable use](docs/acceptable-use.md) states the intended use and its limits.
+The components that [NOTICE](NOTICE) lists keep their own licenses.

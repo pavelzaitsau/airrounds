@@ -2,6 +2,8 @@
 
 AirRounds controls passive Wi-Fi sessions on the ESP32-S2 Wi-Fi Devboard.
 Scan for nearby 2.4 GHz networks and select the approved points to capture.
+Read [acceptable use](../docs/acceptable-use.md) before you build, install, or
+run the app.
 
 ## Build and connect
 

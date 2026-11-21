@@ -6,10 +6,11 @@ so the operator picks what a round captures, and it reserves two future modes
 without defining them. The phase also moves Beacon behind a capture-mode
 contract in the firmware and the app, with no change to its behaviour.
 
-AirRounds stays receive-only. A capture mode never transmits. The phase does
-not add handshake capture, deauthentication, injection, or traffic decryption.
-Those are outside the product, not deferred work. See
-[Security and permitted use](#security-and-permitted-use).
+AirRounds stays receive-only. A capture mode never transmits. The phase does not
+add handshake capture, deauthentication, injection, or traffic decryption.
+Deauthentication, injection, and decryption are outside AirRounds. A later mode
+may add handshake capture under the four limits in [acceptable use][aup-modes].
+See [Security and permitted use](#security-and-permitted-use).
 
 The [capture modes design](../capture-modes-design.md) describes the
 refactoring, the mode contract, and the admission checklist for a new mode.
@@ -39,7 +40,8 @@ frames. It can save one frame or a chain of related frames from one visit.
 | A reserved capability bit and commands in `docs/uart.md` | A mode that persists across app restarts |
 | The mockup `scan-prototype.html`, its logic module, and its test | The legacy manual profile menu, which has no scan support |
 | The refactoring that puts Beacon behind a mode interface, and the **Capture mode** screen in the app | Changes to the Mac check `tools/mac/check_pcap.py` |
-| | Any transmission, handshake or key capture, or decryption |
+| | Any transmission or decryption |
+| | Handshake capture, which a later mode may add |
 
 ## Main menu
 
@@ -176,24 +178,15 @@ labels.
 
 ## Security and permitted use
 
-- Every mode is receive-only. The mode contract has no transmit operation.
-- A mode captures only the access points that the operator selected from the
-  scan list or the profile: the approved access points of the
-  [project plan][plan]. A mode has no other target.
-- The PCAP holds only the frame types that the mode declares. The receive
-  filter passes only those types, and the shared writer refuses any other
-  frame before it creates the file. Beacon declares management frames only.
-  A mode that declares control or data frames needs an admission entry first.
-- A mode decrypts nothing and never saves a handshake or key material. Client
-  MAC addresses never reach the Flipper screen.
-- The refactoring keeps what the [security assurance gap][t9-gap] relies on.
-  The radio starts in `WIFI_MODE_NULL` with a promiscuous receive callback.
-  The source has no frame-transmit call such as `esp_wifi_80211_tx`. The
-  receive filter for Beacon and for the scan passes management frames only.
-- Before a new mode is built, the design document records an admission
-  checklist for it: receive only, the frame types the mode needs and why, the
-  identifiers that reach the PCAP and the journal, and the legal basis, an
-  own or permitted network.
+[Acceptable use][aup-modes] owns the rules for every capture mode, Beacon
+included. This page does not repeat them, so an update to the policy needs no
+update here.
+
+For phase T10, the refactoring keeps what the
+[security assurance gap][t9-gap] relies on. Beacon declares management frames
+only. A new mode passes the
+[admission checklist](../capture-modes-design.md#admission-checklist) before
+it is built.
 
 ## Non-functional requirements
 
@@ -224,3 +217,4 @@ labels.
 [uart]: ../uart.md
 [plan]: ../plan.md
 [t9-gap]: ../t9.md#security-assurance-gap
+[aup-modes]: ../acceptable-use.md#capture-modes-in-scope

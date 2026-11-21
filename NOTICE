@@ -1,0 +1,84 @@
+AirRounds
+Copyright 2026 Pavel Zaitsau
+
+AirRounds is licensed under the PolyForm Noncommercial License 1.0.0. See the
+LICENSE file.
+
+AirRounds includes components developed by third parties, or released under
+other terms, as listed below. These licenses apply only to the listed
+components, not to AirRounds as a whole. The rules for adding third-party code
+are in docs/acceptable-use.md, section "Adding third-party code".
+
+======================================================================
+Adafruit GFX Library classic font (glcdfont.c)
+----------------------------------------------------------------------
+Source:  https://github.com/adafruit/Adafruit-GFX-Library/blob/master/glcdfont.c
+License: BSD-2-Clause
+Files:   docs/ui-ux/prototype-font.js
+
+The UI mockups use ASCII glyphs from this font, with empty edge columns
+trimmed. The glyph data is under the BSD license below. The JavaScript around
+it in the same file is original AirRounds code.
+
+Software License Agreement (BSD License)
+
+Copyright (c) 2012 Adafruit Industries.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+======================================================================
+Copydesk skills (branch-names, commit-messages, demo-video, docs-linter,
+explainer, markdown-formatting, technical-writing)
+----------------------------------------------------------------------
+Source:  original work of the copyright holder, Pavel Zaitsau
+License: MIT-0 (MIT No Attribution)
+Files:   .agents/skills/<skill>/
+
+The repository tracks these skills under .agents/skills/ as development
+tooling. Each skill directory carries its own LICENSE.txt with the MIT-0 text.
+MIT-0 applies to those directories instead of the PolyForm Noncommercial
+License, with one exception below.
+
+The demo-video skill can download and run third-party voice models. The models
+are not included in this repository. Their owners ask a repository that uses
+them to carry their license texts, so .agents/skills/demo-video/NOTICE and
+.agents/skills/demo-video/licenses/ hold those texts:
+
+- Fish Audio S2 Pro: Fish Audio Research License, Copyright 39 AI, Inc.
+- Fish Audio Drama 3: Fish Audio Community License 1.0, Copyright 39 AI, Inc.
+- Boson Higgs TTS 3: Boson Higgs TTS 3 Research and Non-Commercial License,
+  Copyright Boson AI USA, Inc.
+
+Those texts stay under their owners' terms, not MIT-0.
+======================================================================
+Trail of Bits skills (harness-writing, libfuzzer, sharp-edges)
+----------------------------------------------------------------------
+Source:  https://github.com/trailofbits/skills
+License: CC-BY-SA-4.0
+Files:   .agents/skills/harness-writing/, .agents/skills/libfuzzer/,
+         .agents/skills/sharp-edges/
+
+The repository tracks these skills under .agents/skills/ as development
+tooling, included unmodified. Use and distribution are subject to
+CC-BY-SA-4.0 (attribution and share-alike). The full license text and the
+source reference are in .agents/skills/TRAILOFBITS-LICENSE and
+.agents/skills/trailofbits-source.json.
+======================================================================

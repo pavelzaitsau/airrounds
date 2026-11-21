@@ -11,7 +11,7 @@ measurement or automated gate confirms the absence of transmission yet; see
 AirRounds is a personal project for the author's own noncommercial security
 research. The author runs it only on networks the author owns or has written
 permission to test. The author does not offer it as a product or for use by
-anyone else.
+anyone else. The current version is v0.1.
 
 | Component | Language | Directory |
 | --- | --- | --- |

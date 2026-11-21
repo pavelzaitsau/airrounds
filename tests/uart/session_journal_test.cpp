@@ -232,17 +232,18 @@ void testJournalFile(const char* directory, const SessionReport& report) {
         writeSessionJournal(directory, report, stats, {"build-test", "revision-test"});
     assert(written);
     const auto log = contents(final);
-    assert(log == "format=airrounds-session-v1\n"
-                  "build=build-test revision=revision-test protocol=01 radio=passive\n"
-                  "boot=0000000000001234 session=00000001 state=stopped outcome=saved points=2\n"
-                  "started_us=100 ended_us=250 budget_us=20000000\n"
-                  "point=1 bssid=020000000001 channel=6 outcome=saved listen_started_us=100 "
-                  "listen_ended_us=140 management_frames=12 accepted_beacons=3 "
-                  "filtered_frames=9 queue_overflows=2 bytes_written=86 verified_file_size=85 "
-                  "pcap=visit-0000000000001234-00000001-1.pcap\n"
-                  "point=2 bssid=020000000002 channel=11 outcome=none listen_started_us=0 "
-                  "listen_ended_us=0 management_frames=0 accepted_beacons=0 filtered_frames=0 "
-                  "queue_overflows=0 bytes_written=0 verified_file_size=0 pcap=-\n");
+    assert(log ==
+           std::string("format=airrounds-session-v2\nfirmware=") + airrounds::firmwareVersion +
+               " build=build-test revision=revision-test protocol=01 radio=passive\n"
+               "boot=0000000000001234 session=00000001 state=stopped outcome=saved points=2\n"
+               "started_us=100 ended_us=250 budget_us=20000000\n"
+               "point=1 bssid=020000000001 channel=6 outcome=saved listen_started_us=100 "
+               "listen_ended_us=140 management_frames=12 accepted_beacons=3 "
+               "filtered_frames=9 queue_overflows=2 bytes_written=86 verified_file_size=85 "
+               "pcap=visit-0000000000001234-00000001-1.pcap\n"
+               "point=2 bssid=020000000002 channel=11 outcome=none listen_started_us=0 "
+               "listen_ended_us=0 management_frames=0 accepted_beacons=0 filtered_frames=0 "
+               "queue_overflows=0 bytes_written=0 verified_file_size=0 pcap=-\n");
     assert(!std::ifstream(final + ".part"));
     const bool overwritten =
         writeSessionJournal(directory, report, stats, {"another-build", "revision-test"});

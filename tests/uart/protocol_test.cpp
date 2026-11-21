@@ -7,6 +7,7 @@
 
 #include <unistd.h>
 
+#include "firmware_version.h"
 #include "uart_protocol.h"
 
 namespace {
@@ -1207,6 +1208,45 @@ void clientChecksScanDetails() {
     assert(!clientReads("1b", " scan complete 01 00 020000000005 06 41G1"));
 }
 
+void firmwareReadReportsTheVersion() {
+    Wire wire;
+    const std::string version(airrounds::firmwareVersion);
+    // Every board answers the read, whatever features it advertises.
+    EXPECT_REPLY(wire.command("8000000000000001 00000000 firmware"),
+                 "!01 123456789abcdef0 8000000000000001 00000000 ok 00000000 idle none "
+                 "0000000000000000 03 firmware " +
+                     version + "\n");
+    // The read needs scope zero, no arguments, a read request ID, and this boot.
+    EXPECT_CONTAINS(wire.command("8000000000000003 00000001 firmware"), "unknown_session");
+    EXPECT_CONTAINS(wire.command("8000000000000004 00000000 firmware 01"), "bad_request");
+    // A mutation ID is refused and leaves the last mutation where it was.
+    EXPECT_CONTAINS(wire.command("0000000000000005 00000000 firmware"),
+                    " bad_request 00000000 idle none 0000000000000000 ");
+    EXPECT_CONTAINS(wire.send("@01 0000000000000001 8000000000000006 00000000 firmware\n"),
+                    "wrong_boot");
+    assert(wire.command("8000000000000007 00000000 firmware 01").find(" firmware ") ==
+           std::string::npos);
+}
+
+void clientChecksFirmware() {
+    // A version is one to 15 characters of digits and dots, and nothing follows it.
+    assert(clientReads("03", " firmware 0.1"));
+    assert(clientReads("1f", " firmware 12.345"));
+    assert(clientReads("03", " firmware " + std::string(15, '1')));
+    assert(!clientReads("03", " firmware " + std::string(16, '1')));
+    assert(!clientReads("03", " firmware"));
+    assert(!clientReads("03", " firmware 0.1a"));
+    assert(!clientReads("03", " firmware 0.1 extra"));
+    assert(!clientReads("03", " firmware 0.1 aps"));
+    Reply reply;
+    const std::string line = "!01 123456789abcdef0 8000000000000001 00000000 ok 00000000 idle "
+                             "none 0000000000000001 03 firmware 0.1\n";
+    const bool read = readReply(line.c_str(), reply);
+    assert(read);
+    assert(reply.hasFirmware);
+    assert(std::string(reply.firmware) == "0.1");
+}
+
 void clientChecksRoundDetails() {
     // Journal, interruption, and round fields each need their feature bit.
     assert(clientReads("1f", " journal saved interrupted 1 aps"));
@@ -1298,6 +1338,8 @@ int main() try {
     clientChecksScanRows();
     clientChecksScanDetails();
     clientChecksRoundDetails();
+    firmwareReadReportsTheVersion();
+    clientChecksFirmware();
     aSavedRoundDoesNotCarryOver();
     mutationsCheckTheirArguments();
     stopDuringTheLastSaveCompletesTheRound();
@@ -1306,7 +1348,7 @@ int main() try {
     scanListNamesAHiddenRow();
     scanListAddRules();
     scanListReplacesTheFirstWeakestRow();
-    std::cout << "UART protocol: 41 groups passed\n";
+    std::cout << "UART protocol: 43 groups passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

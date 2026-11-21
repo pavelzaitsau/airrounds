@@ -202,7 +202,8 @@ it is built.
   Start and Stop replies use the older encoding.
 - Moving Beacon behind the mode interface does not change its behaviour. The
   5-second and 7-second windows, the 10-second budget per point, and the PCAP
-  and journal formats stay. The existing host tests pass unchanged until the
+  and journal formats stay unchanged in T10. Firmware v0.1 later moved the
+  journal to format v2. The existing host tests pass unchanged until the
   menu itself changes.
 
 ## Open questions

@@ -2957,6 +2957,35 @@ void resultsReturnToTheirScreen() {
     runApp();
 }
 
+void aboutShowsVersions() {
+    Board board(false, true);
+    cardWith({});
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyUp); // Focus wraps to About, the last item.
+        tap(InputKeyOk);
+        // The app asks the board for its version only when About opens.
+        screen("About", "App", "v" FAP_VERSION, "Board", "Reading...");
+        board.advance(4);
+        screen("About", "App", "v" FAP_VERSION, "Board", "v" FAP_VERSION);
+        assert(board.sent.find(" 00000000 firmware\n") != std::string::npos);
+        tap(InputKeyBack);
+        screen("AirRounds", "Capture mode", "Flash board hardware", "Test board", "About", "^");
+
+        // A board that stops answering takes its version with it.
+        board.disconnect();
+        board.advance(40); // Past the 900 ms reply deadline.
+        tap(InputKeyOk);
+        screen("About", "App", "v" FAP_VERSION, "Board", "Not connected");
+
+        // The board comes back. The app reads its version again after the new hello.
+        board.online = true;
+        board.advance(40);
+        screen("About", "App", "v" FAP_VERSION, "Board", "v" FAP_VERSION);
+    };
+    runApp();
+}
+
 void boardFirmwareChanges() {
     Board board;
     cardWith({4});
@@ -3269,6 +3298,7 @@ int main() {
     okTiming();
     resultsReturnToTheirScreen();
     boardFirmwareChanges();
+    aboutShowsVersions();
     repliesSplitAcrossTicks();
     receiveBurstLimits();
     legacyLostStartReply();

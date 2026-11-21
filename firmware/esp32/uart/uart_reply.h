@@ -118,7 +118,26 @@ struct Reply {
     JournalState journal = JournalState::none;
     bool hasScan = false;
     ScanReply scan{};
+    bool hasFirmware = false;
+    char firmware[16]{}; // Up to 15 characters of digits and dots, then a terminator.
 };
+
+inline bool readFirmware(Fields& fields, Reply& reply) {
+    const auto value = fields.take();
+    if (value.size == 0 || value.size >= sizeof(reply.firmware) || !fields.atEnd()) {
+        return false;
+    }
+    for (size_t index = 0; index < value.size; ++index) {
+        const char character = value.data[index];
+        if (character != '.' && (character < '0' || character > '9')) {
+            return false;
+        }
+    }
+    memcpy(reply.firmware, value.data, value.size);
+    reply.firmware[value.size] = '\0';
+    reply.hasFirmware = true;
+    return true;
+}
 
 inline bool readRound(Fields& fields, RoundStatus& round) {
     for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
@@ -168,6 +187,9 @@ inline bool readReplyDetails(Fields& fields, Reply& reply) {
         return true;
     }
     auto marker = fields.take();
+    if (marker.is("firmware")) {
+        return readFirmware(fields, reply);
+    }
     if (marker.is("scan")) {
         reply.hasScan = true;
         return (reply.features & scanFeature) != 0 && readScanReply(fields, reply.scan);

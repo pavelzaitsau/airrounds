@@ -3,6 +3,7 @@
 
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -11,6 +12,15 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "tools/quality"))
 
 from check import ASAN_OPTIONS, Stopped, run, tool  # noqa: E402
+
+
+def app_version():
+    """Return fap_version from the app manifest, which fbt passes to the app as FAP_VERSION."""
+    manifest = (ROOT / "flipper/application.fam").read_text()
+    match = re.search(r'fap_version\s*=\s*"([0-9.]+)"', manifest)
+    if match is None:
+        raise SystemExit("flipper/application.fam declares no fap_version string")
+    return match.group(1)
 
 
 def main():
@@ -30,6 +40,7 @@ def main():
         run([
             cxx, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-g",
             "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+            f'-DFAP_VERSION="{app_version()}"',
             "-I", str(sdk), "-I", str(HERE), "-include", str(HERE / "emulator_sdk.h"),
             str(ROOT / "flipper/airrounds.cpp"), str(HERE / "ui_emulator_test.cpp"),
             "-o", str(binary),

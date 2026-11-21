@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#include "firmware_version.h"
 #include "passive_round.h"
 
 namespace airrounds {
@@ -44,6 +45,9 @@ public:
         }
         size_t used = static_cast<size_t>(count);
         if (code == Code::ok && verb.is("scan_read") && !appendScan(reply, used, scanIndex)) {
+            return false;
+        }
+        if (code == Code::ok && verb.is("firmware") && !appendFirmware(reply, used)) {
             return false;
         }
         return finishReply(reply, used, verb);
@@ -100,6 +104,16 @@ private:
             reply[used++] = digits[byte >> 4U];
             reply[used++] = digits[byte & 0x0fU];
         }
+        return true;
+    }
+
+    static bool appendFirmware(char (&reply)[replyCapacity], size_t& used) {
+        const int count =
+            snprintf(reply + used, sizeof(reply) - used, " firmware %s", firmwareVersion);
+        if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
+            return false;
+        }
+        used += static_cast<size_t>(count);
         return true;
     }
 
@@ -181,6 +195,9 @@ private:
              detailQuery(verb)) &&
             fields.atEnd()) {
             return scope == 0 || scope == session_ ? Code::ok : Code::unknown_session;
+        }
+        if (readRequest && verb.is("firmware") && fields.atEnd()) {
+            return scope == 0 ? Code::ok : Code::unknown_session;
         }
         if (readRequest && verb.is("scan_read")) {
             return readScan(scope, fields, scanIndex);

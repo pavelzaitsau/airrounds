@@ -6,6 +6,7 @@
 #include <string>
 
 #include "../../flipper/ui_state.h"
+#include "firmware_version.h"
 #include "uart_protocol.h"
 
 namespace {
@@ -147,6 +148,108 @@ public:
     uint32_t now = 0;
     std::string outbound;
 };
+
+using airrounds::flipper::BoardFirmware;
+
+void firmwareIsReadOnDemand() {
+    Loopback link;
+    link.handshake();
+    // No read goes out until the app asks, so the status polls keep their order.
+    assert(link.client.boardFirmware() == BoardFirmware::none);
+    link.client.poll(link.now += 350);
+    assert(link.outbound.find(" firmware") == std::string::npos);
+    link.receive(link.deliver());
+
+    link.client.requestFirmware();
+    assert(link.client.boardFirmware() == BoardFirmware::reading);
+    link.client.poll(link.now += 350);
+    assert(link.outbound.find(" 00000000 firmware\n") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.boardFirmware() == BoardFirmware::known);
+    assert(std::string(link.client.firmware()) == airrounds::firmwareVersion);
+    assert(link.client.link() == Link::ready);
+    assert(link.client.pending() == Request::none);
+
+    // The next poll reads the status again, not the version.
+    link.client.poll(link.now += 350);
+    assert(link.outbound.find(" round_status") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.boardFirmware() == BoardFirmware::known);
+}
+
+void olderBoardHasNoFirmwareRead() {
+    Loopback link;
+    link.handshake();
+    link.client.requestFirmware();
+    link.client.poll(link.now += 350);
+    // An older board rejects the unknown read with bad_request and keeps the link.
+    auto reply = tamper(link.deliver(), " ok ", " bad_request ");
+    reply = tamper(reply, " firmware " + std::string(airrounds::firmwareVersion), "");
+    link.receive(reply);
+    assert(link.client.boardFirmware() == BoardFirmware::unknown);
+    assert(link.client.firmware()[0] == '\0');
+    assert(link.client.link() == Link::ready);
+    assert(link.client.pending() == Request::none);
+    link.client.poll(link.now += 350);
+    assert(link.outbound.find(" round_status") != std::string::npos);
+}
+
+void firmwareIsReadAgainAfterALostLink() {
+    Loopback link;
+    link.handshake();
+    link.client.requestFirmware();
+    link.client.poll(link.now += 350);
+    link.receive(link.deliver());
+    assert(link.client.boardFirmware() == BoardFirmware::known);
+    // A lost link drops the version, and the client reads it again after the next hello.
+    link.client.transportLost(link.now);
+    assert(link.client.boardFirmware() == BoardFirmware::reading);
+    link.client.poll(link.now += 300);
+    assert(link.outbound.find(" hello\n") != std::string::npos);
+    link.receive(link.deliver());
+    link.client.poll(link.now);
+    assert(link.outbound.find(" firmware\n") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.boardFirmware() == BoardFirmware::known);
+}
+
+// A firmware read that gets no usable reply reports Unknown and gives way to the status read.
+void firmwareReadGivesWay(Loopback& link) {
+    link.client.poll(link.now += 900);
+    assert(link.client.boardFirmware() == BoardFirmware::unknown);
+    assert(link.client.link() == Link::ready);
+    assert(link.client.pending() == Request::none);
+    link.client.poll(link.now);
+    assert(link.outbound.find(" round_status") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.link() == Link::ready);
+    // The read does not repeat in this boot.
+    link.client.poll(link.now += 350);
+    assert(link.outbound.find(" firmware") == std::string::npos);
+}
+
+void badFirmwareReplyKeepsTheLink() {
+    const char* versions[]{" firmware 0.2-rc1", " firmware 1234567890123456"};
+    for (const char* bad : versions) {
+        Loopback link;
+        link.handshake();
+        link.client.requestFirmware();
+        link.client.poll(link.now += 350);
+        const std::string expected = " firmware " + std::string(airrounds::firmwareVersion);
+        link.receive(tamper(link.deliver(), expected, bad));
+        assert(link.client.pending() == Request::firmware);
+        firmwareReadGivesWay(link);
+    }
+}
+
+void missingFirmwareReplyKeepsTheLink() {
+    Loopback link;
+    link.handshake();
+    link.client.requestFirmware();
+    link.client.poll(link.now += 350);
+    link.outbound.clear();
+    firmwareReadGivesWay(link);
+}
 
 void stopAndSave() {
     Loopback link;
@@ -1352,6 +1455,34 @@ void replyDetailsMustMatchTheRead() {
         link.handshake();
         ignoresTamperedStatus(link, " interrupted 0 aps", " aps");
     }
+    // A version field belongs to the firmware read only. It can follow the features of a
+    // reply that carries no other details: a legacy status, a hello, or a scan mutation.
+    {
+        Loopback link;
+        link.handshake(false); // The client reads plain status, so the reply ends at features.
+        ignoresTamperedStatus(link, " 03\n", " 03 firmware 0.1\n");
+    }
+    {
+        Loopback link;
+        link.client.poll(link.now);
+        const auto hello = link.deliver();
+        link.receive(tamper(hello, " 03\n", " 03 firmware 0.1\n"));
+        assert(link.client.pending() == Request::hello);
+        link.receive(hello);
+        assert(link.client.pending() == Request::none);
+    }
+    {
+        TestScan scanner;
+        Loopback link(&scanner);
+        link.handshake();
+        const bool scanning = link.client.scan(link.now);
+        assert(scanning);
+        const auto reply = link.deliver();
+        link.receive(tamper(reply, " 1b\n", " 1b firmware 0.1\n"));
+        assert(link.client.pending() == Request::scan);
+        link.receive(reply);
+        assert(link.client.pending() == Request::none);
+    }
 }
 
 } // namespace
@@ -1404,6 +1535,11 @@ int main() try {
     savingPointCanStop();
     restartedBoardReusesTheSessionNumber();
     replyDetailsMustMatchTheRead();
+    firmwareIsReadOnDemand();
+    olderBoardHasNoFirmwareRead();
+    firmwareIsReadAgainAfterALostLink();
+    badFirmwareReplyKeepsTheLink();
+    missingFirmwareReplyKeepsTheLink();
     std::cout << "Flipper client checks passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

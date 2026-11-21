@@ -5,6 +5,7 @@
 #include <string>
 
 #include "capture_path.h"
+#include "firmware_version.h"
 #include "pending_write.h"
 #include "sd_file.h"
 
@@ -39,14 +40,15 @@ namespace detail {
 inline size_t formatSessionJournal(char* text, size_t capacity, const SessionReport& report,
                                    const VisitStatistics* stats, JournalBuild build) {
     const auto count = report.status.profile.size();
-    const int header =
-        snprintf(text, capacity,
-                 "format=airrounds-session-v1\nbuild=%s revision=%s protocol=%02x radio=passive\n"
-                 "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
-                 "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
-                 build.id, build.revision, static_cast<unsigned>(version), report.id.boot,
-                 report.id.session, wireName(report.state), wireName(report.outcome), count,
-                 report.budget.startedUs, report.endedUs, report.budget.durationUs);
+    const int header = snprintf(
+        text, capacity,
+        "format=airrounds-session-v2\n"
+        "firmware=%s build=%s revision=%s protocol=%02x radio=passive\n"
+        "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
+        "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
+        firmwareVersion, build.id, build.revision, static_cast<unsigned>(version), report.id.boot,
+        report.id.session, wireName(report.state), wireName(report.outcome), count,
+        report.budget.startedUs, report.endedUs, report.budget.durationUs);
     if (header <= 0 || static_cast<size_t>(header) >= capacity) {
         return 0;
     }

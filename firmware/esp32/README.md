@@ -135,10 +135,11 @@ See the [UART protocol][uart] for wiring, commands, and file names.
 ### On-card session log
 
 Before listening, the firmware tries to write a session checkpoint to
-`session-<boot>-<session>.log.open` on microSD. It records the build, Git
-revision, UART version, passive mode, start time, time budget, and ordered
-BSSID and channel pairs. If the board resets mid-round, the checkpoint can be
-matched to any verified PCAPs by boot ID, session ID, and point order.
+`session-<boot>-<session>.log.open` on microSD. It records the firmware
+version, the build, Git revision, UART version, passive mode, start time, time
+budget, and ordered BSSID and channel pairs. If the board resets mid-round, the
+checkpoint can be matched to any verified PCAPs by boot ID, session ID, and
+point order.
 
 At the end of the round the firmware writes `session-<boot>-<session>.log`.
 The final log also records the end time, overall result, and per-point
@@ -159,5 +160,14 @@ The round stays `finalizing` until the final log attempt finishes. Query
 if the board reports a journal failure. The PCAP result still reflects
 only the capture.
 
+The first line of a log names its format. Firmware v0.1 writes
+`format=airrounds-session-v2`, which adds the `firmware=` field to the second
+line. Earlier firmware wrote `format=airrounds-session-v1` without that field.
+
 `make embedded` sets the source build ID and Git revision. Set
 `AIRROUNDS_REVISION` to a full Git SHA when building an exported tree.
+
+The firmware version is `firmwareVersion` in `uart/firmware_version.h`. It
+must equal `fap_version` in `flipper/application.fam`; `make check` fails when
+the two differ. When you change the version, change both files in the same
+commit.

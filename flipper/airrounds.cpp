@@ -240,6 +240,7 @@ constexpr const char* scanMenu[]{"Scan area", "Capture mode", "Flash board hardw
                                  "About"};
 constexpr size_t scanMenuSize = sizeof(scanMenu) / sizeof(scanMenu[0]);
 constexpr size_t captureModeItem = 1;
+constexpr size_t aboutItem = scanMenuSize - 1;
 
 size_t topRow(size_t focus, size_t visible = visibleNetworkRows) {
     return focus < visible ? 0 : focus - visible + 1;
@@ -561,6 +562,31 @@ const char* modeLock(const App& app) {
     return flipper::captureModeLock(board);
 }
 
+// fbt passes fap_version from application.fam as FAP_VERSION, so the app has one source of truth.
+#ifndef FAP_VERSION
+#error "FAP_VERSION is undefined; build the app with fbt or ufbt"
+#endif
+
+void showAbout(Frame& frame, const App& app) {
+    title(frame, "About");
+    frame.row("App", "v" FAP_VERSION);
+    // "v", a version of up to 15 characters, and a terminator. Frame::row keeps the first 14
+    // characters; a major.minor version stays far below that.
+    char board[1 + sizeof(uart::Reply::firmware)];
+    const auto firmware = app.client.boardFirmware();
+    const auto link = app.client.link();
+    if (link == Link::lost || link == Link::incompatible) {
+        snprintf(board, sizeof(board), "Not connected");
+    } else if (firmware == flipper::BoardFirmware::known) {
+        snprintf(board, sizeof(board), "v%s", app.client.firmware());
+    } else if (firmware == flipper::BoardFirmware::unknown) {
+        snprintf(board, sizeof(board), "Unknown");
+    } else {
+        snprintf(board, sizeof(board), "Reading...");
+    }
+    frame.row("Board", board);
+}
+
 void showCaptureMode(Frame& frame, const App& app) {
     title(frame, "Capture mode");
     frame.compact = true;
@@ -598,7 +624,11 @@ Frame makeFrame(const App& app) {
         showCaptureMode(frame, app);
         break;
     case Page::placeholder:
-        title(frame, scanMenu[app.placeholder]);
+        if (app.placeholder == aboutItem) {
+            showAbout(frame, app);
+        } else {
+            title(frame, scanMenu[app.placeholder]);
+        }
         break;
     case Page::points:
         title(frame, "Access points");
@@ -997,6 +1027,9 @@ void perform(App& app, const Binding& binding) {
         break;
     case Action::placeholder:
         app.placeholder = binding.index;
+        if (app.placeholder == aboutItem) {
+            app.client.requestFirmware();
+        }
         go(app, Page::placeholder);
         break;
     case Action::start:

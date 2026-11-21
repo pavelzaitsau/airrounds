@@ -13,7 +13,7 @@ choice on top of it; see [Capture modes](capture-modes.md).
 
 The recent Devboard presents this flow as its default. Flipper uses the network name in the scan list and progress view. Distinct access points with the same name receive numbered labels. Hidden names receive a fallback label. BSSIDs and channels are internal to the scan, verified PCAPs, and session journals. Existing manual profiles remain readable for older board firmware.
 
-**Capture mode** chooses the mode of the next round; see [Capture modes](capture-modes.md). **Flash board hardware**, **Test board**, and **About** are empty screens in this change. Back returns to the menu.
+**Capture mode** chooses the mode of the next round; see [Capture modes](capture-modes.md). **Flash board hardware** and **Test board** are empty screens in this change. **About** shows the app version and the board firmware version, or **Reading...**, **Unknown** for an older board, or **Not connected**. The scan menu is the only way to About, so a board without scan support never shows it. The mockup below still shows About as an empty screen. Back returns to the menu.
 
 ## Mockup
 

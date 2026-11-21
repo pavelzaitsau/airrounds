@@ -33,8 +33,11 @@ matching selections and outcomes during rescans while AirRounds is open.
 
 **Capture mode** chooses the mode of the next round. Beacon is the only
 available mode; **Todo A** and **Todo B** show **Soon**. See
-[Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware**,
-**Test board**, and **About** are empty menu entries. Back returns to the menu.
+[Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware** and
+**Test board** are empty menu entries. **About** shows the app version and the
+board firmware version. An older board with scan support shows **Unknown**.
+About is part of the scan menu only, so a board without scan support never shows
+it. Back returns to the menu.
 
 [Workflow and interactive mockup][scan-flow]
 

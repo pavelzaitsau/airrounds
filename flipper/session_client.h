@@ -7,7 +7,9 @@ namespace airrounds {
 namespace flipper {
 
 enum class Link { connecting, ready, lost, incompatible };
-enum class Request { none, hello, status, start, stop, scan, scan_read, scan_stop };
+enum class Request { none, hello, status, start, stop, scan, scan_read, scan_stop, firmware };
+// The board firmware version: not asked for, being read, not reported by an older board, or known.
+enum class BoardFirmware { none, reading, unknown, known };
 
 class SessionClient {
 public:
@@ -30,6 +32,17 @@ public:
     bool supportsScan() const { return supportsScan_; }
     bool supportsRoundDetail() const { return supportsRoundDetail_; }
     uart::ScanState scanState() const { return scanState_; }
+
+    BoardFirmware boardFirmware() const { return firmwareState_; }
+    const char* firmware() const { return firmware_; }
+
+    // Reads the board firmware version once, before the next status read.
+    void requestFirmware() {
+        if (firmwareState_ != BoardFirmware::known) {
+            firmwareState_ = BoardFirmware::reading;
+            firmware_[0] = '\0';
+        }
+    }
     const uart::ScanList& scanResults() const { return scanResults_; }
 
     bool canStart(size_t count = 1) const {
@@ -107,7 +120,16 @@ public:
 
     void poll(uint32_t now) {
         if (pending_ != Request::none) {
-            if (now - sentAt_ >= requestTimeoutMs) {
+            if (now - sentAt_ < requestTimeoutMs) {
+                return;
+            }
+            // A version read without a usable reply must not drop the link, or a board that
+            // answers in an unknown form would never reach a status read.
+            if (pending_ == Request::firmware) {
+                firmwareState_ = BoardFirmware::unknown;
+                pending_ = Request::none;
+                wait_ = {now, 0};
+            } else {
                 transportLost(now);
             }
             return;
@@ -115,6 +137,8 @@ public:
         if (now - wait_.since >= wait_.duration) {
             if (boot_ == 0) {
                 request(Request::hello, now);
+            } else if (firmwareState_ == BoardFirmware::reading) {
+                request(Request::firmware, now);
             } else if (cancelScanPending_) {
                 cancelScanPending_ = false;
                 request(Request::scan_stop, now);
@@ -165,6 +189,11 @@ private:
 
     void reconnect(Link reason, uint32_t now) {
         boot_ = 0;
+        // Another boot can run other firmware, so read the version again after the next hello.
+        if (firmwareState_ != BoardFirmware::none) {
+            firmwareState_ = BoardFirmware::reading;
+            firmware_[0] = '\0';
+        }
         if (scanState_ == uart::ScanState::running) {
             scanState_ = uart::ScanState::error;
         }
@@ -211,6 +240,8 @@ private:
             verb = "scan_read";
         } else if (kind == Request::scan_stop) {
             verb = "scan_stop";
+        } else if (kind == Request::firmware) {
+            verb = "firmware";
         } else if (kind == Request::status) {
             expectsRound_ = supportsRounds_;
             expectsJournal_ = supportsJournal_;
@@ -281,6 +312,9 @@ private:
             return;
         }
         if (pending_ == Request::hello) {
+            if (reply.hasFirmware) {
+                return;
+            }
             if (reply.code != uart::Code::ok || (reply.features & uart::passiveVisitFeature) == 0) {
                 reconnect(Link::incompatible, now);
                 return;
@@ -304,17 +338,37 @@ private:
             return;
         }
 
-        if (pending_ == Request::scan || pending_ == Request::scan_read ||
-            pending_ == Request::scan_stop) {
+        if (pending_ == Request::firmware) {
+            acceptFirmware(reply, now);
+        } else if (pending_ == Request::scan || pending_ == Request::scan_read ||
+                   pending_ == Request::scan_stop) {
             acceptScan(reply, now);
         } else {
             acceptStatus(reply, now);
         }
     }
 
+    void acceptFirmware(const uart::Reply& reply, uint32_t now) {
+        if (reply.hasRound || reply.hasJournal || reply.hasScan ||
+            reply.hasFirmware != (reply.code == uart::Code::ok)) {
+            return;
+        }
+        // An older board does not know the read and answers bad_request. Any other refusal also
+        // leaves the version unknown for this boot; the link stays up either way.
+        if (reply.hasFirmware) {
+            memcpy(firmware_, reply.firmware, sizeof(firmware_));
+            firmwareState_ = BoardFirmware::known;
+        } else {
+            firmwareState_ = BoardFirmware::unknown;
+        }
+        rememberMutation(reply.lastMutation);
+        pending_ = Request::none;
+        wait_ = {now, 0};
+    }
+
     void acceptScan(const uart::Reply& reply, uint32_t now) {
         using uart::ScanState;
-        if (reply.hasRound || reply.hasJournal ||
+        if (reply.hasRound || reply.hasJournal || reply.hasFirmware ||
             (reply.code == uart::Code::ok &&
              (reply.hasScan != (pending_ == Request::scan_read) ||
               (mutationPending() && reply.lastMutation != key_.request)))) {
@@ -461,8 +515,9 @@ private:
         }
         const bool expectsDetail = pending_ == Request::status && supportsRoundDetail_;
         const bool hasDetail = reply.round.interruption != uart::VisitInterruption::unknown;
-        if (!validSnapshot(reply) || reply.hasScan || reply.hasRound != expectsRound_ ||
-            reply.hasJournal != expectsJournal_ || hasDetail != expectsDetail ||
+        if (!validSnapshot(reply) || reply.hasScan || reply.hasFirmware ||
+            reply.hasRound != expectsRound_ || reply.hasJournal != expectsJournal_ ||
+            hasDetail != expectsDetail ||
             (reply.hasRound && (!validRound(reply) || !consistentRound(reply))) ||
             (mutation && (reply.session != key_.scope || reply.lastMutation != key_.request))) {
             return;
@@ -511,6 +566,8 @@ private:
     };
     Delay wait_{};
     uint32_t sentAt_ = 0;
+    BoardFirmware firmwareState_ = BoardFirmware::none;
+    char firmware_[sizeof(uart::Reply::firmware)]{};
     char line_[uart::wireReplyCapacity]{};
     size_t length_ = 0;
 };

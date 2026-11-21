@@ -191,6 +191,25 @@ On the card, a multi-point round uses `visit-<boot>-<session>-<slot>.pcap`.
 Slots start at 1 and follow the request order. Use the matching `.pcap.ok`
 receipt for each file. A round with one point uses the original file name.
 
+## Read the firmware version
+
+| Command | Scope | Request and arguments |
+| --- | --- | --- |
+| `firmware` | Zero | Read request with no arguments. Reports the board firmware version. |
+
+An OK `firmware` reply appends `firmware <version>`, for example
+`firmware 0.1`. The version holds 1 to 15 characters, digits and dots only. No
+other field follows it. Firmware v0.1 is the first to answer this read, and no
+feature bit announces it. An older board answers `bad_request`.
+
+The Flipper app sends the read when **About** opens. After that, it sends it
+again once after every reconnect, before the first status read. The app shows
+**Unknown** for `bad_request` or another refusal, for a reply in another form,
+or for no reply within 900 ms, and keeps the link up in each case. The
+exceptions are `wrong_boot`, which drops the link, and `unsupported_version`,
+which marks the board incompatible, as for any other read. Unlike a failed
+status read, a failed version read does not count as a lost link.
+
 ## Observation windows
 
 Both `start` and `round` use the same listening limits. A visit starts with

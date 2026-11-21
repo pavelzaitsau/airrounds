@@ -135,7 +135,9 @@ a split frame, lost replies, link recovery, wrong versions, and delayed
 requests and replies. Reply tests cover cut-off replies and boot text
 before a reply. The tests also check that reception stops before storage
 starts, that a quiet stop reports its final result right away, and that the
-board reports a storage error.
+board reports a storage error. The `firmware` read tests check the version
+reply, its field rules, and that a refused, malformed, or missing version reply
+leaves the Flipper link up.
 
 Use the [UART firmware and wiring][uart-protocol] for the hardware check.
 Keep a backup of the current flash before loading the UART image.
@@ -147,6 +149,8 @@ Keep a backup of the current flash before loading the UART image.
 1. Reconnect. Send a fresh `hello` and a fresh `status`. Check the result.
 1. Send a start with version `02`. Check for `unsupported_version`.
 1. Send an old stop during a new visit. Check that the new visit continues.
+1. Send a `firmware` read with scope zero. Check that the reply reports
+   `firmwareVersion` from `firmware/esp32/uart/firmware_version.h`.
 1. For `saved`, copy the PCAP and receipt from the card and run the Mac check.
 
 ### T5a bench results

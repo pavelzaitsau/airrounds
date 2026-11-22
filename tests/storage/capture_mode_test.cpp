@@ -623,11 +623,76 @@ void testEapolMode(const std::string& directory) {
             "the handshake saves to eapol.pcap");
 }
 
+// A1: the round-scoped transmit budget, the mode context, and the default poll().
+void testTransmitContext() {
+    using session::ModeContext;
+    using session::TransmitBudget;
+    using session::Transmitter;
+
+    TransmitBudget budget;
+    require(budget.remaining() == 0, "an unseeded budget is empty");
+    require(!budget.tryConsume(), "an unseeded budget transmits nothing");
+    budget.seed(3);
+    require(budget.remaining() == 3, "seed sets the frame count");
+    require(budget.tryConsume() && budget.tryConsume() && budget.tryConsume(),
+            "the budget spends its three frames");
+    require(!budget.tryConsume(), "a spent budget refuses the next frame");
+    require(budget.remaining() == 0, "a spent budget is empty");
+    budget.seed(2);
+    require(budget.remaining() == 2, "a re-seed resets the budget");
+
+    struct Counter final : Transmitter {
+        unsigned sends = 0;
+        bool result = true;
+        bool send(const uint8_t*, size_t) override {
+            ++sends;
+            return result;
+        }
+    };
+    const uint8_t frame[4] = {0xc0, 0, 0, 7};
+
+    ModeContext inert{nullptr, &budget};
+    require(!inert.transmit(frame, sizeof(frame)) && budget.remaining() == 2,
+            "a context without a transmitter never transmits and spends no budget");
+
+    Counter counter;
+    ModeContext context{&counter, &budget};
+    require(context.transmit(frame, sizeof(frame)) && context.transmit(frame, sizeof(frame)),
+            "the context transmits up to the budget");
+    require(!context.transmit(frame, sizeof(frame)) && counter.sends == 2,
+            "the cap refuses the frame beyond the budget and never reaches the transmitter");
+
+    budget.seed(1);
+    counter.result = false;
+    require(!context.transmit(frame, sizeof(frame)), "a failed send returns false");
+    require(counter.sends == 3 && budget.remaining() == 0,
+            "a failed send still counts against the cap");
+    require(!context.transmit(frame, sizeof(frame)) && counter.sends == 3,
+            "the spent budget stops further transmits");
+
+    ModeContext noBudget{&counter, nullptr};
+    require(!noBudget.transmit(frame, sizeof(frame)) && counter.sends == 3,
+            "a context without a budget never transmits");
+
+    // The default poll() does nothing: a passive mode neither transmits nor changes state.
+    BeaconMode passive;
+    passive.reset();
+    require(passive.begin(target, 10000000), "the passive visit starts");
+    TransmitBudget pollBudget;
+    pollBudget.seed(5);
+    Counter pollCounter;
+    ModeContext pollContext{&pollCounter, &pollBudget};
+    passive.poll(1000, pollContext);
+    require(pollCounter.sends == 0 && pollBudget.remaining() == 5,
+            "the default poll() transmits nothing");
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
     require(argc == 2, "pass an empty temporary directory");
     const std::string directory = argv[1];
+    testTransmitContext();
     testBeaconModeMatchesPassiveSession(directory);
     testBeaconWindowCap();
     testQuietBeaconVisit();

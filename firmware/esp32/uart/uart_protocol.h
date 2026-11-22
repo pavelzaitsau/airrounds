@@ -121,11 +121,19 @@ private:
         return true;
     }
 
-    // The board lists Beacon (00) and EAPOL (01), two hex digits each.
+    // The board lists Beacon (00) and EAPOL (01), two hex digits each. The active build also lists
+    // the active mode (02); the default build never does, so it stays provably receive-only.
     static bool appendModes(char (&reply)[replyCapacity], size_t& used) {
+#ifdef AIRROUNDS_ACTIVE
+        const int count = snprintf(reply + used, sizeof(reply) - used, " modes 03 %02x %02x %02x",
+                                   static_cast<unsigned>(beaconModeId),
+                                   static_cast<unsigned>(eapolModeId),
+                                   static_cast<unsigned>(activeModeId));
+#else
         const int count = snprintf(reply + used, sizeof(reply) - used, " modes 02 %02x %02x",
                                    static_cast<unsigned>(beaconModeId),
                                    static_cast<unsigned>(eapolModeId));
+#endif
         if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
             return false;
         }
@@ -145,8 +153,18 @@ private:
 
     bool modesListQuery(Field verb) const { return scan_ != nullptr && verb.is("modes"); }
 
+    // A round may select only a mode the board lists. The default build does not list the active
+    // mode, so it rejects a mode 02 tail with bad_request; only the active build accepts it.
     static bool knownMode(uint8_t modeId) {
-        return modeId == beaconModeId || modeId == eapolModeId;
+        if (modeId == beaconModeId || modeId == eapolModeId) {
+            return true;
+        }
+#ifdef AIRROUNDS_ACTIVE
+        if (modeId == activeModeId) {
+            return true;
+        }
+#endif
+        return false;
     }
 
     bool journalQuery(Field verb) const {

@@ -99,6 +99,22 @@ public:
         return false;
     }
 
+    // True when the held frames form a set an attacker could use offline: messages 1 and 2 from one
+    // client, messages 3 and 4 from one client, or a message 1 that carries a PMKID. The active mode
+    // finishes a visit early on this, so a round of several networks moves on once a network yields a
+    // crackable capture. The passive mode does not call it.
+    bool hasCrackableSet() const {
+        constexpr uint8_t pair12 = (1U << 0U) | (1U << 1U);
+        constexpr uint8_t pair34 = (1U << 2U) | (1U << 3U);
+        if ((held_ & pair34) == pair34 && memcmp(frames_[2] + 4, frames_[3] + 10, 6) == 0) {
+            return true; // Message 3 client is Addr1; message 4 client is Addr2.
+        }
+        if ((held_ & pair12) == pair12 && memcmp(frames_[0] + 4, frames_[1] + 10, 6) == 0) {
+            return true; // Message 1 client is Addr1; message 2 client is Addr2.
+        }
+        return (held_ & (1U << 0U)) != 0 && hasPmkidKde(frames_[0], sizes_[0]);
+    }
+
     ModeResult finish() override { return held_ != 0 ? ModeResult::found : ModeResult::not_observed; }
 
     size_t recordCount() const override {

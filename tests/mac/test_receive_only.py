@@ -21,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FIRMWARE = ROOT / "firmware/esp32"
+ACTIVE = ROOT / "firmware/active"
 SOURCE_SUFFIXES = (".h", ".c", ".cpp", ".ino")
 
 # Every esp_wifi_*, esp_now_*, or WiFi.* identifier the firmware uses today. Each one receives
@@ -73,6 +74,22 @@ class ReceiveOnlyTest(unittest.TestCase):
         self.assertTrue(source_files(FIRMWARE), "no firmware sources found to scan")
         violations = scan_tree(FIRMWARE)
         self.assertEqual(violations, [], f"unreviewed radio use in firmware/esp32: {violations}")
+
+    def test_default_firmware_does_not_include_active(self):
+        # The token grep cannot see an include, so a firmware/esp32 file that pulled in a
+        # firmware/active header would link the transmit path into the default image unseen. See
+        # tests/mac/test_active_transmit.py for the active build's own confinement gate.
+        active_headers = {path.name for path in ACTIVE.rglob("*") if path.suffix in SOURCE_SUFFIXES}
+        include = re.compile(r'^\s*#\s*include\s*["<]([^">]+)[">]')
+        violations = []
+        for path in source_files(FIRMWARE):
+            for line in path.read_text(errors="replace").splitlines():
+                match = include.match(line)
+                if match and (Path(match.group(1)).name in active_headers or
+                              "active/" in match.group(1)):
+                    violations.append((path, match.group(1)))
+        self.assertEqual(violations, [],
+                         f"a default-build file includes a firmware/active header: {violations}")
 
     def test_gate_fails_on_each_planted_transmit_path(self):
         # A gate that cannot fail proves nothing: plant each forbidden form and expect a failure.

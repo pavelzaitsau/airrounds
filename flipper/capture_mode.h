@@ -45,9 +45,10 @@ struct BoardModes {
     }
 };
 
-// The order of the Capture mode screen. Todo B holds the place of a future mode; its labels repeat
-// the neutral ones until a real mode defines its own. EAPOL (index 1) records the WPA 4-way
-// handshake; the board must list 01 before the app offers it (implied = false).
+// The order of the Capture mode screen. EAPOL (index 1) records the WPA 4-way handshake; the active
+// mode (index 2) forces a rejoin, then records it. The board must list a mode's ID before the app
+// offers it (implied = false), and only the opt-in active build lists 02, so on a default board the
+// active row shows Soon.
 constexpr CaptureModeInfo captureModes[]{
     {"Beacon", "Beacons", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u", "Captured",
      "Not seen", "Captured to board SD", "Point not seen", SuccessMeaning::packet_found, 0x00, true,
@@ -55,8 +56,9 @@ constexpr CaptureModeInfo captureModes[]{
     {"EAPOL", "Handshakes", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u", "Captured",
      "Not seen", "Handshake to board SD", "No handshake", SuccessMeaning::packet_found, 0x01, false,
      true},
-    {"Todo B", "Points", "Done", "No result", "Listening", "Saving", "Done %u/%u", "Done",
-     "No result", "Done", "No result", SuccessMeaning::any_result, 0x02, false, false},
+    {"Deauth", "Handshakes", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u",
+     "Captured", "Not seen", "Handshake to board SD", "No handshake", SuccessMeaning::packet_found,
+     0x02, false, true},
 };
 constexpr size_t captureModeCount = sizeof(captureModes) / sizeof(captureModes[0]);
 constexpr size_t beaconModeIndex = 0;

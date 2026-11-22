@@ -1,8 +1,9 @@
 # AirRounds development plan
 
-This plan covers passive diagnostics. Both toolchains are installed and
-produced test `.bin` and `.fap` files. See the [T0 report](t0.md) for the
-results and open checks.
+This plan covers passive diagnostics through T11. Phase T12 adds the first
+active mode, in a separate opt-in build; the default build stays receive-only.
+See [T12](t12.md). Both toolchains are installed and produced test `.bin` and
+`.fap` files. See the [T0 report](t0.md) for the results and open checks.
 
 ## Bench and first release
 
@@ -121,6 +122,7 @@ the limits and what happens when a visit uses its time.
 | [T9: Hardware acceptance](t9.md) | T8 | Closed for the original beacon criteria. The report records the deferred checks and the later scan workflow evidence. |
 | [T10: Capture modes](t10.md) | T9 | Closed. Add the **Capture mode** choice with Beacon and two reserved placeholders. Move Beacon behind a mode contract in the firmware and the app, with per-mode frame types and frame chains; see the [design](capture-modes-design.md). Reserve the protocol fields in documentation only. Any future mode stays within the four limits in [acceptable use](acceptable-use.md#capture-modes-in-scope). Acceptance: the requirement, the mockup with its own test, the design, Beacon unchanged in the existing host tests and on hardware, and the menu checks in the UI emulator. |
 | [T11: EAPOL capture](t11.md) | T10 | Built on the host. The reserved Todo A placeholder is now an EAPOL mode that records the WPA 4-way handshake frames for the round's target; see the [spec](t11.md). The mode runs under the four limits in [acceptable use](acceptable-use.md#capture-modes-in-scope) and adds no transmission. The parser is clean-room. Protocol step R5 runs on the board and in the app, with the writer EAPOL gate, the journal fix with format v3, a 60 s budget per EAPOL point, and the receive-only source check. The version is 0.2. `make check`, `make asan`, `make tsan`, and `make embedded` pass within every memory limit. The WPA2-PSK bench is the open item: no device is available yet; see the [acceptance report](t11.md#acceptance-report). |
+| [T12: Active EAPOL capture](t12.md) | T11 | The opt-in active mode: a targeted unicast deauthentication forces a client rejoin, then the mode captures the EAPOL handshake. The transmit path compiles only into a separate opt-in build; the default build stays provably receive-only. Built in steps A1 to A6, with the transmit audit; the host gates pass. The WPA2-PSK bench is the open item; see the [acceptance status](t12.md#acceptance-status). |
 
 ## Bench checks and handoff
 

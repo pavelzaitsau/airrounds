@@ -68,19 +68,21 @@ The EAPOL mode captures the EAPOL frames of the WPA 4-way handshake. Handshake
 capture shows what an attacker could collect toward an offline password-cracking
 attempt, so the operator can judge that risk on their own networks.
 
-Handshake and EAPOL capture, and every other advanced mode, is in scope only
-under all four limits below. The same limits bind every current and future mode.
+Handshake and EAPOL capture are in scope only under all four limits below. The
+same limits bind every passive mode. The active mode transmits and is governed by
+the [active operation](#active-operation) section, which adds its own limits.
 
 | Limit | Rule |
 | --- | --- |
 | Own or permitted networks | The mode captures only the round's approved access points, one to five BSSIDs, which the operator owns or has written permission to test. |
 | Research use | The capture is a test-only artefact for a security assessment. |
-| Receive-only | The radio stays in `WIFI_MODE_NULL`. The firmware has no transmit call, and no mode adds one. |
+| Receive-only | In the passive build the radio stays in `WIFI_MODE_NULL`, and the firmware has no transmit call. The active mode is the single exception; see [active operation](#active-operation). |
 | No decryption | A mode decrypts nothing and derives no key, PMK, PTK, PMKID, or passphrase. It saves only the raw frame bytes it receives. |
 
-A handshake mode captures a handshake only when a client joins on its own. It
-never forces a reconnect, because AirRounds never transmits. It does not crack a
-password, and the project provides nothing that does.
+A passive handshake mode captures a handshake only when a client joins on its
+own. It never forces a reconnect, because the passive build never transmits. The
+active mode forces the reconnect; see [active operation](#active-operation). No
+mode cracks a password, and the project provides nothing that does.
 
 Raw handshake frames contain key-derived values: EAPOL message 1 can carry the
 PMKID, and messages 2 to 4 carry the MIC. Either value allows an offline guess of
@@ -153,8 +155,11 @@ the hardware would technically allow them.
 - Running AirRounds against a network the operator does not own or is not
   permitted in writing to test. This is the strictest rule, and nothing
   overrides it.
-- Transmitting any frame, including deauthentication, beacon, or probe frames.
-  AirRounds is receive-only, and no mode adds a transmit path.
+- Transmitting any frame, except the targeted unicast deauthentication frame the
+  active mode sends in the separate opt-in build under
+  [active operation](#active-operation). That frame hits only the targeted client.
+  A beacon frame, a probe frame, and a broadcast deauthentication frame stay
+  prohibited in every build. The passive build adds no transmit path.
 - Decrypting captured traffic, or deriving a key, PMK, PTK, PMKID, or passphrase
   from a capture. This includes an offline guess of the passphrase.
 - Capturing to collect another person's credentials, traffic content, or
@@ -166,7 +171,9 @@ the hardware would technically allow them.
 ## Technical safeguards
 
 Each safeguard below backs a line in the policy. Each claim names the source
-that proves it, so a reviewer can check the claim against the code.
+that proves it, so a reviewer can check the claim against the code. These
+safeguards describe the default passive build. The active build's transmit
+confinement has its own safeguards in [active operation](#active-operation).
 
 | Safeguard | Claim | Evidence |
 | --- | --- | --- |
@@ -197,6 +204,87 @@ today, not on radio measurement. State the limits plainly, and do not overclaim.
   beacon data. A handshake capture also holds client MAC addresses and
   key-derived values that allow an offline guess of the passphrase. Treat every
   capture as sensitive. See [Data handling](#data-handling).
+
+## Active operation
+
+The active mode is the one part of AirRounds that transmits. It sends a targeted
+deauthentication frame to force a client off an approved access point, so the
+client rejoins and produces a WPA handshake the mode captures. It realises the
+Todo B capture-mode slot. Its requirements are in [T12](t12.md).
+
+The active mode exists only in a separate, opt-in transmit build. The author
+builds it deliberately and runs it only within this section. The shipped default
+build has no active mode and no transmit path, and the receive-only safeguards
+above describe that default build.
+
+The passive four limits still bind the active mode, except that it transmits
+under the limits below. The passive capture of the handshake, the no-decryption
+rule, and the own-or-permitted-network rule all still hold. The mode captures the
+handshake with the same target-access-point filter as passive EAPOL. Only the
+transmit side is new.
+
+| Limit | Rule |
+| --- | --- |
+| Approved target only | The mode transmits only to a client on one of the round's approved access points, which the operator owns or has written permission to test for active transmission. |
+| Unicast only | The mode sends a deauthentication frame to one client address. It never broadcasts a deauthentication frame, and it sends no other frame type. |
+| Bounded transmit | The mode sends a small burst, and at most two bursts per visit, under a hard per-round transmit cap. It never streams continuously. |
+| Auto-stop | The mode stops transmitting once it captures a handshake, within one poll cycle. A kill switch stops it at any time. |
+| Audit | The journal records the transmit per point: the frame count, the reason, and the target client on a `tx` line, with the target access point, the channel, and the listen window on the point line. |
+
+### Operator attestation
+
+Before an active round, the operator confirms all of the following. The operator
+owns the decision and the responsibility.
+
+- The operator owns the target network, or holds written, time-bounded permission
+  that names active transmission, not testing alone.
+- The target client is not a safety-critical or mission-critical device. A
+  deauthentication burst disrupts a device that depends on the connection, such as
+  a camera, a voice phone, or a telemetry sensor.
+- The operator accepts the legal risk below.
+
+### Legal and regulatory
+
+Deauthentication is an active interference with a radio link, not a passive
+capture. It carries a heavier legal exposure than the rest of AirRounds.
+
+- The FCC treats Wi-Fi deauthentication as prohibited jamming under 47 U.S.C.
+  section 333. The enforcement record is strongest for deauthenticating devices on
+  a network the operator does not own. The operator carries this risk on every
+  active round.
+- The law on radio interference binds the operator independently of this policy
+  and of the license. When the law and this policy disagree, the stricter rule
+  wins.
+- This document is not legal advice. For an active test, confirm the legal basis
+  before the round.
+
+### Transmit confinement
+
+The active build cannot prove the absence of a transmit capability, because it
+has one. It proves instead that the transmit path is confined. State this limit
+plainly, and do not claim the passive build's stronger property for the active
+build. Each claim names the source that proves it, as the passive safeguards do.
+
+| Safeguard | Claim | Evidence |
+| --- | --- | --- |
+| Separate build | The transmit path compiles only into the opt-in active build; the default build excludes it. | `tools/quality/embedded.py` builds `firmware/active/airrounds_active` behind `AIRROUNDS_ACTIVE`; the default build links no `firmware/active` source. |
+| Confined transmit | The active build holds its one transmit call in one reviewed file; a gate variant proves no other file transmits. | `DeauthTransmitter::send` in `firmware/active/deauth_tx.h`; `tests/mac/test_active_transmit.py` |
+| No stray include | No `firmware/esp32` file includes a `firmware/active` header, so the default image cannot pull in the transmit path. | `tests/mac/test_receive_only.py` |
+| One frame type | The mode transmits only a unicast deauthentication frame; it builds no other frame. | `buildDeauthFrame` in `firmware/active/deauth_frame.h`; `ActiveEapolMode::poll` in `firmware/active/active_eapol_mode.h` |
+| Bounded by construction | The burst size, the per-visit burst count, and the per-round cap are compile-time constants, not operator settings. | `ActiveEapolMode` constants; `transmitCap` in `firmware/esp32/uart/passive_round.h` |
+
+These safeguards rest on the source and the source-level gates, not on an RF
+measurement. The [open hardware bench](t12.md#hardware-bench) confirms the
+transmit on the Devboard, including that the station-mode radio emits nothing but
+the deauthentication burst.
+
+### Reuse
+
+The active mode is clean-room original work. pwnagotchi and esp32-marauder
+implement the same technique under GPL-3.0, which the project cannot copy; see
+[adding third-party code](#adding-third-party-code). A deauthentication frame is a
+fixed structure defined by the IEEE 802.11 standard, so the mode is written from
+the standard, not from a third-party implementation.
 
 ## Data handling
 

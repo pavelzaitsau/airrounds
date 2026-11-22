@@ -42,7 +42,7 @@ void testModeLookup() {
     assert(&modeOf(0x00) == &airrounds::flipper::beaconMode());
     assert(same(modeOf(0x00).listTitle, "Beacons"));
     assert(same(modeOf(0x01).name, "EAPOL") && same(modeOf(0x01).listTitle, "Handshakes"));
-    assert(same(modeOf(0x02).name, "Todo B"));
+    assert(same(modeOf(0x02).name, "Deauth") && same(modeOf(0x02).listTitle, "Handshakes"));
     // A mode the app does not know gets the neutral labels.
     const auto& unknown = modeOf(0x42);
     assert(&unknown == &airrounds::flipper::neutralMode);
@@ -63,11 +63,12 @@ void testAvailability() {
     listed.ids[1] = 0x01;
     // EAPOL is implemented and offered only when the board lists 01.
     assert(modeAvailable(captureModes[1], listed));
-    // Todo B stays unavailable until the app implements it, even when the board lists it.
-    BoardModes listsTodoB;
-    listsTodoB.count = 1;
-    listsTodoB.ids[0] = 0x02;
-    assert(!modeAvailable(captureModes[2], listsTodoB));
+    // The active mode is implemented; the app offers it only when the board lists 02, which only the
+    // opt-in active build does. A default board does not list it, so it stays unavailable.
+    BoardModes listsActive;
+    listsActive.count = 1;
+    listsActive.ids[0] = 0x02;
+    assert(modeAvailable(captureModes[2], listsActive));
     BoardModes absenceListed;
     absenceListed.count = 1;
     absenceListed.ids[0] = 0x05;

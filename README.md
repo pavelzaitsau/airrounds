@@ -5,10 +5,14 @@ ESP32-S2 Wi-Fi Devboard. It captures from each approved 2.4 GHz access point it
 visits, one to five per round, to microSD. Beacon mode saves one beacon per
 point; EAPOL mode saves the EAPOL-Key frames of the WPA 4-way handshake a joining
 client produces. Each capture goes in its own PCAP file with a receipt, and a
-session log records the round. The source has no transmit, deauthentication,
-decryption, or key-derivation path. No RF measurement confirms the absence of
-transmission on the bench yet; a host test fails the build on a transmit call in
-the firmware. See [known limits](docs/acceptable-use.md#known-limits).
+session log records the round. The default build has no transmit,
+deauthentication, decryption, or key-derivation path. No RF measurement confirms
+the absence of transmission on the bench yet; a host test fails the build on a
+transmit call in the firmware. See [known limits](docs/acceptable-use.md#known-limits).
+
+A separate, opt-in build will add an active mode that transmits a targeted
+deauthentication frame to force a handshake. It is not built yet. See
+[active operation](docs/acceptable-use.md#active-operation).
 
 AirRounds is a personal project for the author's own noncommercial security
 research. The author runs it only on networks the author owns or has written

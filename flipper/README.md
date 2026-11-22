@@ -32,7 +32,8 @@ screen keeps BSSIDs and channels out of the interface. The list preserves
 matching selections and outcomes during rescans while AirRounds is open.
 
 **Capture mode** chooses the mode of the next round. Beacon is always available;
-**EAPOL** is available once the board lists it; **Todo B** shows **Soon**. See
+**EAPOL** and **Deauth** are available once the board lists them. Only the opt-in
+active build lists **Deauth**, so on the passive firmware it shows **Soon**. See
 [Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware** and
 **Test board** are empty menu entries. **About** shows the app version and the
 board firmware version. An older board with scan support shows **Unknown**.

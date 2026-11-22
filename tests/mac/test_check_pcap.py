@@ -6,7 +6,8 @@ from tempfile import TemporaryDirectory
 import unittest
 import zlib
 
-from tests.fixtures.pcap_samples import BEACON, SUPPORTED_RATES, header, record, samples
+from tests.fixtures.pcap_samples import (BEACON, CLIENT, CLIENT_TWO, SUPPORTED_RATES,
+                                         eapol_capture, eapol_frame, header, record, samples)
 
 
 TOOL = Path(__file__).resolve().parents[2] / "tools/mac/check_pcap.py"
@@ -231,3 +232,38 @@ class CheckPcapTest(unittest.TestCase):
                 result = self.run_check("--bssid", address)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn("nonzero unicast", result.stderr)
+
+    def run_eapol(self, data, code):
+        self.capture.write_bytes(data)
+        result = self.run_check("--eapol", "--bssid", "02:00:00:00:00:01")
+        self.assertEqual(result.returncode, code, result.stderr)
+        return result
+
+    def test_eapol_complete_handshake_succeeds(self):
+        result = self.run_eapol(eapol_capture([1, 2, 3, 4]), 0)
+        self.assertTrue(result.stdout.startswith("EAPOL:"), result.stdout)
+        self.assertIn("client 1: messages 1, 2, 3, 4", result.stdout)
+
+    def test_eapol_without_the_join_exits_three(self):
+        result = self.run_eapol(eapol_capture([1, 2]), 3)
+        self.assertIn("no completed handshake", result.stderr)
+
+    def test_eapol_cross_client_pair_is_not_a_join(self):
+        # Message 3 to one client and message 4 from another are not a completed handshake.
+        self.run_eapol(eapol_capture([3, 4], clients=[CLIENT, CLIENT_TWO]), 3)
+
+    def test_eapol_rejects_a_non_eapol_record(self):
+        result = self.run_eapol(header() + record(frame=BEACON), 1)
+        self.assertIn("not an EAPOL-Key frame", result.stderr)
+
+    def test_eapol_output_holds_no_client_mac(self):
+        result = self.run_eapol(eapol_capture([1, 2, 3, 4]), 0)
+        for text in (result.stdout, result.stderr):
+            self.assertNotIn(CLIENT.hex(), text)
+            self.assertNotIn(CLIENT.hex(":"), text)
+
+    def test_eapol_needs_a_bssid(self):
+        self.capture.write_bytes(eapol_capture([1, 2, 3, 4]))
+        result = self.run_check("--eapol")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("--eapol needs --bssid", result.stderr)

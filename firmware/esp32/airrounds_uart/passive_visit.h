@@ -10,6 +10,7 @@
 
 #include "beacon_mode.h"
 #include "capture_path.h"
+#include "eapol_mode.h"
 #include "pcap_record.h"
 #include "session_journal.h"
 #include "uart_protocol.h"
@@ -40,6 +41,12 @@ public:
     }
 
     uint64_t nowUs() const override { return static_cast<uint64_t>(esp_timer_get_time()); }
+
+    // Point the capture pipeline at the round's mode. The wire IDs match the CaptureModeId values.
+    void selectMode(uint8_t modeId) override {
+        mode_ = modeId == eapolModeId ? static_cast<session::CaptureMode*>(&eapol_)
+                                      : static_cast<session::CaptureMode*>(&beacon_);
+    }
 
     void startScan() override {
         scanList_.clear();
@@ -214,13 +221,15 @@ private:
             self.observeNetwork(*packet, packet->rx_ctrl.sig_len - fcsSize);
         } else if (self.listening_) {
             auto& point = self.statistics_[self.currentPoint_];
-            if (frameType == storage::managementFrames) {
-                ++point.managementFrames;
+            // Count the mode's declared frame type, so the journal does not label a data count as
+            // management and filtered_frames (observed - accepted) never underflows.
+            if ((frameType & self.mode_->needs().frameTypes) != 0) {
+                ++point.observedFrames;
             }
             if (packet->rx_ctrl.rx_state == 0 && packet->rx_ctrl.sig_len > fcsSize &&
                 self.mode_->onFrame(packet->payload, packet->rx_ctrl.sig_len - fcsSize,
                                     packet->rx_ctrl.channel, self.nowUs() - self.startedUs_)) {
-                ++point.acceptedBeacons;
+                ++point.acceptedFrames;
             }
         }
         portEXIT_CRITICAL(&self.receiveLock_);
@@ -391,7 +400,13 @@ private:
         journalPending_.store(false, std::memory_order_release);
     }
 
+    static_assert(beaconModeId == static_cast<uint8_t>(session::CaptureModeId::beacon),
+                  "the Beacon wire ID must equal its CaptureModeId value");
+    static_assert(eapolModeId == static_cast<uint8_t>(session::CaptureModeId::eapol),
+                  "the EAPOL wire ID must equal its CaptureModeId value");
+
     session::BeaconMode beacon_;
+    session::EapolMode eapol_;
     session::CaptureMode* mode_ = &beacon_;
     mutable portMUX_TYPE receiveLock_ = portMUX_INITIALIZER_UNLOCKED;
     uint64_t startedUs_ = 0;

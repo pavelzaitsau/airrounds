@@ -45,14 +45,16 @@ struct BoardModes {
     }
 };
 
-// The order of the Capture mode screen. Todo A and Todo B hold the place of future modes; their
-// labels repeat the neutral ones until a real mode defines its own.
+// The order of the Capture mode screen. Todo B holds the place of a future mode; its labels repeat
+// the neutral ones until a real mode defines its own. EAPOL (index 1) records the WPA 4-way
+// handshake; the board must list 01 before the app offers it (implied = false).
 constexpr CaptureModeInfo captureModes[]{
     {"Beacon", "Beacons", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u", "Captured",
      "Not seen", "Captured to board SD", "Point not seen", SuccessMeaning::packet_found, 0x00, true,
      true},
-    {"Todo A", "Points", "Done", "No result", "Listening", "Saving", "Done %u/%u", "Done",
-     "No result", "Done", "No result", SuccessMeaning::any_result, 0x01, false, false},
+    {"EAPOL", "Handshakes", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u", "Captured",
+     "Not seen", "Handshake to board SD", "No handshake", SuccessMeaning::packet_found, 0x01, false,
+     true},
     {"Todo B", "Points", "Done", "No result", "Listening", "Saving", "Done %u/%u", "Done",
      "No result", "Done", "No result", SuccessMeaning::any_result, 0x02, false, false},
 };

@@ -36,15 +36,33 @@ python3 tools/mac/check_pcap.py path/to/capture.pcap \
   --bssid 02:00:00:00:00:01
 ```
 
+## Check an EAPOL handshake
+
+Use `--eapol` with `--bssid` to check a raw 802.11 EAPOL capture. Every record
+must be an EAPOL-Key frame for the BSSID; the firmware writes nothing else, so
+any other record reports `unsupported`. The checker classifies each handshake
+message from the key-info flags and groups the frames by client, the non-BSSID
+address taken by the DS bits. It reports which messages the capture holds per
+client, numbered in order of first appearance. It prints no client MAC address
+and reads no nonce, MIC, or key data.
+
+```sh
+python3 tools/mac/check_pcap.py path/to/capture.pcap \
+  --eapol --bssid 02:00:00:00:00:01
+```
+
+A completed handshake needs messages 3 and 4 from one client. A wrong passphrase
+repeats messages 1 and 2, so messages 1 or 2 alone are no join.
+
 | Result | Exit code | Meaning |
 | --- | --- | --- |
-| `valid` | 0 | All requested checks passed |
+| `valid`, `EAPOL` | 0 | All requested checks passed; with `--eapol`, one client completed a handshake |
 | `truncated` | 1 | A header or record ends early, or the receipt expects more bytes |
 | `damaged` | 1 | An invalid field, empty capture, or receipt mismatch |
-| `unsupported` | 1 | The checker cannot handle the format, link type, or record size |
+| `unsupported` | 1 | The checker cannot handle the format, link type, or record size, or a record is not an EAPOL-Key frame for the BSSID |
 | `read error` | 1 | The checker could not open or read an input file |
-| Usage error | 2 | The command has an invalid or missing argument |
-| `not observed` | 3 | The capture passed the file checks, with no usable record for the requested BSSID |
+| Usage error | 2 | The command has an invalid or missing argument, or `--eapol` without `--bssid` |
+| `not observed`, `no completed handshake` | 3 | The capture passed the file checks, with no usable record for the BSSID, or no client completed a handshake |
 
 ## Reproduce T3 on a Mac
 

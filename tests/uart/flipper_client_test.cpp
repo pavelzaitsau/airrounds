@@ -125,7 +125,14 @@ public:
         receive("ROM: reset" + hello);
         assert(client.link() != Link::ready);
         client.poll(now);
-        const char* request = scanning && rounds                 ? " round_status_detail\n"
+        // A bit-5 board answers a modes read after hello, before the first status poll.
+        if (scanning && rounds) {
+            assert(outbound.find(" modes\n") != std::string::npos);
+            receive(deliver());
+            assert(client.link() != Link::ready);
+            client.poll(now);
+        }
+        const char* request = scanning && rounds                 ? " round_status_mode\n"
                               : visit.journalSupported && rounds ? " round_status_log\n"
                               : rounds                           ? " round_status\n"
                                                                  : " status\n";
@@ -769,7 +776,7 @@ void scanReadsEveryRow() {
     rowsMatchTheBoard(link.client, scanner);
     assert(link.client.canStart(5) && !link.client.canStart(6));
     link.client.poll(link.now);
-    assert(link.outbound.find(" round_status_detail\n") != std::string::npos);
+    assert(link.outbound.find(" round_status_mode\n") != std::string::npos);
     link.receive(link.deliver());
 
     // A new scan clears the earlier rows.
@@ -815,7 +822,7 @@ void scanRowsMustArriveInOrder() {
         assert(link.client.pending() == Request::none);
         assert(link.client.canStart());
         link.client.poll(link.now);
-        assert(link.outbound.find(" round_status_detail\n") != std::string::npos);
+        assert(link.outbound.find(" round_status_mode\n") != std::string::npos);
     }
     {
         // The row count must not change during one scan.
@@ -856,9 +863,9 @@ void scanRepliesMustMatchTheRequest() {
     assert(scanned);
     const auto accepted = link.deliver();
     // A read reply cannot confirm the scan command.
-    link.receive(tamper(accepted, " 1b\n", " 1b scan running 00 00\n"));
+    link.receive(tamper(accepted, " 3b\n", " 3b scan running 00 00\n"));
     assert(link.client.pending() == Request::scan);
-    link.receive(tamper(accepted, " 1b\n", " 1b aps\n"));
+    link.receive(tamper(accepted, " 3b\n", " 3b aps\n"));
     assert(link.client.pending() == Request::scan);
     link.receive(accepted);
     assert(link.client.pending() == Request::none);
@@ -951,7 +958,7 @@ void cancelBeforeScanReply() {
     assert(link.client.scanState() == ScanState::idle);
     assert(link.client.pending() == Request::none);
     link.client.poll(link.now);
-    assert(link.outbound.find(" round_status_detail\n") != std::string::npos);
+    assert(link.outbound.find(" round_status_mode\n") != std::string::npos);
 }
 
 void cancelDuringScanRead() {
@@ -1026,6 +1033,11 @@ void reopenIgnores(Loopback& link, const std::string& from, const std::string& t
     link.client = SessionClient(Loopback::write, &link, 0x90);
     link.client.poll(link.now);
     link.receive(link.deliver());
+    if (link.scanning) {
+        // A bit-5 board answers a modes read after the new hello, before the status read.
+        link.client.poll(link.now);
+        link.receive(link.deliver());
+    }
     link.client.poll(link.now);
     const auto reply = link.deliver();
     link.receive(tamper(reply, from, to));
@@ -1113,7 +1125,7 @@ void failedScanDropsTheCancel() {
     link.receive(refused);
     assert(link.client.scanState() == ScanState::error);
     link.client.poll(link.now);
-    assert(link.outbound.find(" round_status_detail\n") != std::string::npos);
+    assert(link.outbound.find(" round_status_mode\n") != std::string::npos);
 }
 
 void finishedScanSurvivesLinkLoss() {
@@ -1453,7 +1465,7 @@ void replyDetailsMustMatchTheRead() {
         TestScan scanner;
         Loopback link(&scanner);
         link.handshake();
-        ignoresTamperedStatus(link, " interrupted 0 aps", " aps");
+        ignoresTamperedStatus(link, " interrupted 0 mode 00 aps", " aps");
     }
     // A version field belongs to the firmware read only. It can follow the features of a
     // reply that carries no other details: a legacy status, a hello, or a scan mutation.
@@ -1478,11 +1490,127 @@ void replyDetailsMustMatchTheRead() {
         const bool scanning = link.client.scan(link.now);
         assert(scanning);
         const auto reply = link.deliver();
-        link.receive(tamper(reply, " 1b\n", " 1b firmware 0.1\n"));
+        link.receive(tamper(reply, " 3b\n", " 3b firmware 0.1\n"));
         assert(link.client.pending() == Request::scan);
         link.receive(reply);
         assert(link.client.pending() == Request::none);
     }
+}
+
+// R5 reply parsing: the modes list, the mode marker, result digit 5, and the absence_confirmed
+// wire name.
+void captureModeParsing() {
+    const std::string head = "!01 123456789abcdef0 8000000000000001 00000000 ok 00000000 idle none "
+                             "0000000000000000 ";
+    Reply reply;
+    // The modes list parses under bit 5 (3b).
+    assert(readReply((head + "3b modes 02 00 01\n").c_str(), reply) && reply.hasModes &&
+           reply.modeCount == 2 && reply.modeIds[0] == 0 && reply.modeIds[1] == 1);
+    // Without bit 5 the modes marker is rejected.
+    assert(!readReply((head + "1b modes 02 00 01\n").c_str(), reply));
+    // A count above 8, a repeated ID, or a trailing field rejects the reply.
+    assert(!readReply((head + "3b modes 09 00 01 02 03 04 05 06 07 08\n").c_str(), reply));
+    assert(!readReply((head + "3b modes 02 01 01\n").c_str(), reply));
+    assert(!readReply((head + "3b modes 01 00 aps\n").c_str(), reply));
+
+    // round_status_mode parses the mode marker before aps and accepts result digit 5.
+    assert(readReply((head + "3b interrupted 0 mode 01 aps 020000000001065\n").c_str(), reply) &&
+           reply.hasMode && reply.mode == 1 &&
+           reply.round.results[0] == Outcome::absence_confirmed);
+    // A round reply without the mode marker rejects digit 5 and keeps the digit-4 ceiling.
+    assert(!readReply((head + "3b aps 020000000001065\n").c_str(), reply));
+    assert(readReply((head + "3b aps 020000000001062\n").c_str(), reply) &&
+           reply.round.results[0] == Outcome::saved);
+
+    assert(std::string(wireName(Outcome::absence_confirmed)) == "absence_confirmed");
+}
+
+// An EAPOL round: the mode tail on the round line, the reported mode, and a 300-second round that
+// keeps the link up.
+void captureModeClientRound() {
+    TestScan scanner;
+    Loopback link(&scanner);
+    link.handshake();
+    airrounds::session::Profile one;
+    const bool profileAdded = one.add(target);
+    assert(profileAdded);
+    const bool started = link.client.start(one, link.now, 0x01);
+    assert(started);
+    assert(link.outbound.find(" mode 01\n") != std::string::npos);
+    link.receive(link.deliver());
+    link.receive(statusReply(link));
+    assert(link.client.reportedMode() == 0x01);
+    // The request timeout and status poll are per request, not per round, so a long round holds.
+    for (int cycle = 0; cycle < 900; ++cycle) { // 900 * 350 ms is over 300 seconds.
+        link.now += 350;
+        link.client.poll(link.now);
+        if (!link.outbound.empty()) {
+            link.receive(link.deliver());
+        }
+        assert(link.client.link() == Link::ready);
+    }
+}
+
+// A modes read that times out or is rejected keeps the link up and leaves the choice pending; a
+// later retry learns the list without starving the status poll.
+void captureModeModesFailure() {
+    TestScan scanner;
+    Loopback link(&scanner);
+    link.client.poll(link.now);
+    link.receive(link.deliver()); // hello
+    link.client.poll(link.now);
+    assert(link.outbound.find(" modes\n") != std::string::npos);
+    link.outbound.clear(); // Drop the request: the modes read times out.
+    link.now += 1000;
+    link.client.poll(link.now); // The timeout clears the pending modes read.
+    assert(link.client.modesPending());
+    link.client.poll(link.now); // The status poll runs next.
+    assert(link.outbound.find(" round_status_mode\n") != std::string::npos);
+    link.receive(link.deliver());
+    assert(link.client.link() == Link::ready && link.client.modesPending());
+    // Retry until the list is learned; reject the first modes reply, accept the next.
+    bool rejectedOnce = false;
+    for (int cycle = 0; cycle < 12 && link.client.modesPending(); ++cycle) {
+        link.now += 350;
+        link.client.poll(link.now);
+        const bool isModes = link.outbound.find(" modes\n") != std::string::npos;
+        auto reply = link.deliver();
+        if (isModes && !rejectedOnce) {
+            reply = tamper(reply, " ok ", " bad_request ");
+            rejectedOnce = true;
+        }
+        link.receive(reply);
+        assert(link.client.link() == Link::ready);
+    }
+    assert(rejectedOnce && !link.client.modesPending());
+    assert(link.client.boardModeCount() == 2 && link.client.boardModeIds()[1] == 0x01);
+}
+
+// A confirmed absence (digit 5) in a round_status_mode reply is accepted, and a later round_stop
+// reply in the old encoding keeps the confirmed absence and the link.
+void captureModeDigitFiveFlow() {
+    TestScan scanner;
+    Loopback link(&scanner);
+    link.handshake();
+    const bool started = link.client.start(twoPointProfile(), link.now, 0x01);
+    assert(started);
+    link.receive(link.deliver());
+    // Point 0 saves; point 1 keeps running.
+    link.visit.outcome = Outcome::saved;
+    link.visit.done = true;
+    link.board.poll();
+    link.visit.done = false;
+    auto reply = statusReply(link);
+    // Tamper point 0 to a confirmed absence; the client accepts it under the mode marker.
+    link.receive(tamper(reply, "020000000001062", "020000000001065"));
+    assert(link.client.round().results[0] == Outcome::absence_confirmed);
+    assert(link.client.link() == Link::ready);
+    // Stop: the round_stop reply carries the old encoding, but the snapshot keeps digit 5.
+    const bool stopped = link.client.stop(link.client.visitId(), link.now);
+    assert(stopped);
+    link.receive(link.deliver());
+    assert(link.client.link() == Link::ready);
+    assert(link.client.round().results[0] == Outcome::absence_confirmed);
 }
 
 } // namespace
@@ -1540,6 +1668,10 @@ int main() try {
     firmwareIsReadAgainAfterALostLink();
     badFirmwareReplyKeepsTheLink();
     missingFirmwareReplyKeepsTheLink();
+    captureModeParsing();
+    captureModeClientRound();
+    captureModeModesFailure();
+    captureModeDigitFiveFlow();
     std::cout << "Flipper client checks passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -5,6 +5,13 @@
 namespace airrounds {
 namespace uart {
 
+// Capture-mode wire IDs, two hex digits on the wire. passive_round.h and the Flipper build see
+// these, which session::CaptureModeId (in session/capture_mode.h) must not reach: uart_reply.h and
+// the Flipper build have no include path for session/. passive_visit.h static_asserts that each
+// constant equals its CaptureModeId value.
+constexpr uint8_t beaconModeId = 0x00;
+constexpr uint8_t eapolModeId = 0x01;
+
 struct CaptureId {
     VisitId visit;
     unsigned slot; // Zero keeps the filename used for a single visit.
@@ -52,6 +59,9 @@ class VisitBackend {
 public:
     virtual ~VisitBackend() = default;
     virtual uint64_t nowUs() const = 0;
+    // Points the visit at the capture mode for this round, before beginRound. The default no-op
+    // keeps Beacon, so a backend that supports only Beacon needs no override.
+    virtual void selectMode(uint8_t /*modeId*/) {}
     virtual void beginRound(const SessionReport&) {}
     virtual VisitStart start(const session::Target& target, const VisitBudget& budget) = 0;
     virtual bool observationDone() const = 0;
@@ -68,19 +78,23 @@ class PassiveRound {
 public:
     explicit PassiveRound(VisitBackend& visit) : visit_(visit) {}
 
-    bool start(const VisitId& id, const session::Profile& profile) {
+    bool start(const VisitId& id, const session::Profile& profile, uint8_t modeId = beaconModeId) {
         if (profile.size() == 0 || state_ == State::running || state_ == State::finalizing) {
             return false;
         }
+        // Select on every start, after the running-round check so a start never switches the mode
+        // of a running round, and so a start after an EAPOL round returns the visit to Beacon.
+        visit_.selectMode(modeId);
         id_ = id;
         status_ = {};
         status_.profile = profile;
         status_.interruption = VisitInterruption::no;
+        status_.mode = modeId;
         current_ = 0;
         stopRequested_ = false;
         observationInterrupted_ = false;
         anySaved_ = false;
-        budget_ = {visit_.nowUs(), profile.size() * visitBudgetUs};
+        budget_ = {visit_.nowUs(), profile.size() * visitBudgetUs(modeId)};
         state_ = State::running;
         outcome_ = Outcome::none;
         preparing_ = true;
@@ -127,8 +141,12 @@ public:
     JournalState journalState() const { return visit_.journalState(); }
 
 private:
-    // Allow up to 7 seconds for listening plus time for radio setup and storage.
-    static constexpr uint64_t visitBudgetUs = 10000000;
+    // The point's budget per mode: Beacon allows up to 7 s of listening plus radio setup and
+    // storage within 10 s; EAPOL waits for a client to join, so it gets 60 s, of which the mode
+    // keeps a 3 s save reserve. See docs/t11.md, "Timing".
+    static constexpr uint64_t visitBudgetUs(uint8_t modeId) {
+        return modeId == eapolModeId ? 60000000ULL : 10000000ULL;
+    }
 
     void advancePreparation() {
         if (visit_.journalPending()) {

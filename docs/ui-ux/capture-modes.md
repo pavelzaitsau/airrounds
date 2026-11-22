@@ -21,9 +21,10 @@ refactoring, the mode contract, and the admission checklist for a new mode.
 ## Approved design
 
 The operator keeps the scan workflow and gets a **Capture mode** item in the
-main menu. The current mode is **Beacon**. Two placeholders, **Todo A** and
-**Todo B**, hold the place of future modes and show **Soon**. The operator
-cannot select a placeholder. A round runs in one mode from start to finish.
+main menu. The modes are **Beacon** and **EAPOL** (added in T11); a placeholder
+**Todo B** holds the place of a future mode and shows **Soon**. The operator
+cannot select a placeholder, and the app offers **EAPOL** only once the board
+lists it. A round runs in one mode from start to finish.
 
 A capture mode owns its labels and the meaning of its result. A future mode
 can define success as a frame found or as an absence confirmed without a
@@ -35,13 +36,15 @@ frames. It can save one frame or a chain of related frames from one visit.
 
 | In scope | Out of scope |
 | --- | --- |
-| The **Capture mode** menu item and screen | The protocol commands for modes, which `docs/uart.md` only reserves |
-| Mode labels, availability, and result meaning | The algorithm, name, or file format of Todo A and Todo B |
-| A reserved capability bit and commands in `docs/uart.md` | A mode that persists across app restarts |
-| The mockup `scan-prototype.html`, its logic module, and its test | The legacy manual profile menu, which has no scan support |
-| The refactoring that puts Beacon behind a mode interface, and the **Capture mode** screen in the app | Changes to the Mac check `tools/mac/check_pcap.py` |
-| | Any transmission or decryption |
-| | Handshake capture, which a later mode may add |
+| The **Capture mode** menu item and screen | The algorithm, name, or file format of Todo B |
+| Mode labels, availability, and result meaning | A mode that persists across app restarts |
+| A capability bit and commands in `docs/uart.md` | The legacy manual profile menu, which has no scan support |
+| The mockup `scan-prototype.html`, its logic module, and its test | Any transmission or decryption |
+| The refactoring that puts Beacon behind a mode interface, and the **Capture mode** screen in the app | |
+
+The EAPOL mode, the protocol commands behind feature bit 5, and the Mac check
+`--eapol` criterion were out of T10 scope and are built in T11; see
+[T11](../t11.md).
 
 ## Main menu
 
@@ -58,7 +61,7 @@ The scan menu gains one item. The order is **Scan area**, **Capture mode**,
 ## Capture mode screen
 
 The screen has the heading **Capture mode** and three rows: **Beacon**,
-**Todo A**, and **Todo B**.
+**EAPOL**, and **Todo B**.
 
 - A `*` marker stands before the current mode, wherever the focus is.
 - An unavailable mode shows **Soon** at the right of its row.
@@ -95,8 +98,8 @@ Down do not clear it. **Not available yet** clears at the next key press.
 - The local choice sets the mode of the next Start only. The round keeps that
   mode from start to finish.
 - The labels and the result meaning of a running or finished round come from
-  the mode that the board reports. An app reopened during a Todo A round shows
-  Todo A labels, not Beacon labels. The app treats a board without the
+  the mode that the board reports. An app reopened during an EAPOL round shows
+  EAPOL labels, not Beacon labels. The app treats a board without the
   capture-mode capability as Beacon. If the board reports a mode that the app
   does not know, the screens use the neutral labels in the table below.
 - **Scan area** always listens for beacons, whatever the mode.
@@ -142,17 +145,21 @@ Down do not clear it. **Not available yet** clears at the next key press.
   beacon has its PCAP and receipt. A point without a beacon produces no file
   today, so the form of that evidence is an open question.
 
-| Label slot | Beacon | Neutral, for an unknown mode |
-| --- | --- | --- |
-| List heading | **Beacons** | **Points** |
-| Row success | **Saved** | **Done** |
-| Row miss | **Not seen** | **No result** |
-| Progress rows | **Listening**, **Saving** | **Listening**, **Saving** |
-| Progress counter | **Captured 1/3** | **Done 1/3** |
-| Result success | **Captured** | **Done** |
-| Result miss | **Not seen** | **No result** |
-| Detail success | **Captured to board SD** | **Done** |
-| Detail miss | **Point not seen** | **No result** |
+| Label slot | Beacon | EAPOL | Neutral, for an unknown mode |
+| --- | --- | --- | --- |
+| List heading | **Beacons** | **Handshakes** | **Points** |
+| Row success | **Saved** | **Saved** | **Done** |
+| Row miss | **Not seen** | **Not seen** | **No result** |
+| Progress rows | **Listening**, **Saving** | **Listening**, **Saving** | **Listening**, **Saving** |
+| Progress counter | **Captured 1/3** | **Captured 1/3** | **Done 1/3** |
+| Result success | **Captured** | **Captured** | **Done** |
+| Result miss | **Not seen** | **Not seen** | **No result** |
+| Detail success | **Captured to board SD** | **Handshake to board SD** | **Done** |
+| Detail miss | **Point not seen** | **No handshake** | **No result** |
+
+The EAPOL **Captured** result reports that the board saved at least one EAPOL-Key
+frame for the target. It does not claim a completed join; the Mac check owns that
+judgement.
 
 Each point result maps to a label slot by the mode's meaning of success:
 
@@ -202,14 +209,13 @@ it is built.
   Start and Stop replies use the older encoding.
 - Moving Beacon behind the mode interface does not change its behaviour. The
   5-second and 7-second windows, the 10-second budget per point, and the PCAP
-  and journal formats stay unchanged in T10. Firmware v0.1 later moved the
-  journal to format v2. The existing host tests pass unchanged until the
-  menu itself changes.
+  and journal formats stay unchanged in T10. Firmware v0.1 moved the journal to
+  format v2; T11 moved it to v3 and added the EAPOL mode with a 60-second budget
+  per point. The 5-second and 7-second windows are Beacon only.
 
 ## Open questions
 
-- The names **Todo A** and **Todo B** are placeholders. A real mode replaces
-  them.
+- The name **Todo B** is a placeholder. A real mode replaces it.
 - The evidence for a confirmed absence is undefined. The design document
   defines it before the first mode of that kind is built.
 

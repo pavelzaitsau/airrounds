@@ -265,16 +265,39 @@ bool readyToStart(const App& app) {
     return app.client.supportsScan() ? app.client.canStart(1) : canStart(app);
 }
 
-// A board without the capture-mode capability runs every round in Beacon mode, so the
-// labels of a running or finished round are Beacon labels until the board reports a mode.
-const flipper::CaptureModeInfo& roundMode(const App& /*app*/) {
-    return flipper::beaconMode();
+// The labels of a running or finished round come from the mode round_status_mode reports; until
+// the first such reply names it, the chosen mode's labels apply, so an EAPOL round never shows
+// Beacon labels while it waits.
+const flipper::CaptureModeInfo& roundMode(const App& app) {
+    // Use the board's reported mode only for a real round; an idle round_status_mode reply reports
+    // mode 00, which must not override the chosen mode before a round starts.
+    if (app.client.reportedModeKnown() && app.client.round().profile.size() != 0) {
+        return flipper::modeOf(app.client.reportedMode());
+    }
+    return flipper::captureModes[app.captureMode];
 }
 
-// The board lists no capture modes until the reserved `modes` command exists, so only modes
-// that every board supports are available.
-flipper::BoardModes boardModes(const App& /*app*/) {
-    return {};
+// The capture modes the board lists in its `modes` reply, or none when the board has no bit 5.
+flipper::BoardModes boardModes(const App& app) {
+    flipper::BoardModes modes;
+    if (app.client.supportsCaptureModes()) {
+        modes.count = app.client.boardModeCount();
+        const uint8_t* ids = app.client.boardModeIds();
+        for (size_t index = 0; index < modes.count && index < sizeof(modes.ids); ++index) {
+            modes.ids[index] = ids[index];
+        }
+    }
+    return modes;
+}
+
+// A non-Beacon choice returns to Beacon, clearing the per-point results, once a successful modes
+// reply no longer lists it or the board loses bit 5; while the list is still pending it waits.
+void syncCaptureMode(App& app) {
+    if (app.captureMode != flipper::beaconModeIndex && !app.client.modesPending() &&
+        !flipper::modeAvailable(flipper::captureModes[app.captureMode], boardModes(app))) {
+        app.captureMode = flipper::beaconModeIndex;
+        app.networks.clearOutcomes();
+    }
 }
 
 bool unconfirmedStart(const App& app) {
@@ -296,14 +319,14 @@ RunReport currentRun(const App& app) {
     return report;
 }
 
-void showOutcome(Frame& frame, const RunReport& report) {
+void showOutcome(Frame& frame, const RunReport& report, const flipper::CaptureModeInfo& mode) {
     if (report.id.session == 0) {
         title(frame, "No result available");
         return;
     }
     title(frame, flipper::outcomeTitle(report));
     char count[32];
-    snprintf(count, sizeof(count), "%u of %u captured", flipper::savedPoints(report),
+    snprintf(count, sizeof(count), "%u of %u captured", flipper::savedPoints(report, mode),
              static_cast<unsigned>(flipper::reportSize(report)));
     frame.row(count);
     if (report.outcome == Outcome::storage_error) {
@@ -339,8 +362,8 @@ void showNetworkProgress(Frame& frame, const App& app) {
     const auto total = report.round.profile.size();
     title(frame, "Capture");
     const auto& mode = roundMode(app);
-    snprintf(frame.titleRight, sizeof(frame.titleRight), mode.counter, flipper::savedPoints(report),
-             static_cast<unsigned>(total));
+    snprintf(frame.titleRight, sizeof(frame.titleRight), mode.counter,
+             flipper::savedPoints(report, mode), static_cast<unsigned>(total));
     frame.row(report.state == State::running ? mode.listening : mode.saving);
     if (slot < total) {
         char name[25];
@@ -416,7 +439,7 @@ void showStatus(Frame& frame, const App& app) {
         title(frame, readyToStart(app) ? "Ready" : boardIssue(app));
         frame.row("Press Back for menu");
     } else {
-        showOutcome(frame, currentRun(app));
+        showOutcome(frame, currentRun(app), roundMode(app));
     }
 }
 
@@ -516,7 +539,10 @@ void showNetworks(Frame& frame, const App& app) {
     snprintf(frame.titleRight, sizeof(frame.titleRight), "%u/5 selected",
              static_cast<unsigned>(selected));
     snprintf(frame.leftKey, sizeof(frame.leftKey), "Scan");
-    if (selected != 0 && app.client.canStart(selected)) {
+    // A non-Beacon choice waits for the board to confirm its mode list before Start appears.
+    const bool modePending =
+        app.captureMode != flipper::beaconModeIndex && app.client.modesPending();
+    if (selected != 0 && !modePending && app.client.canStart(selected)) {
         snprintf(frame.rightKey, sizeof(frame.rightKey), "Start (%u)",
                  static_cast<unsigned>(selected));
     }
@@ -546,6 +572,8 @@ void showNetworks(Frame& frame, const App& app) {
         snprintf(frame.titleRight, sizeof(frame.titleRight), "Log failed");
     } else if (app.client.link() != Link::ready) {
         snprintf(frame.titleRight, sizeof(frame.titleRight), "Board offline");
+    } else if (modePending) {
+        snprintf(frame.titleRight, sizeof(frame.titleRight), "Mode pending");
     }
     frame.binding = {Action::selectNetwork, app.focus, {}};
 }
@@ -711,7 +739,7 @@ Frame makeFrame(const App& app) {
             title(frame, "Checking status");
             frame.row("Waiting for board");
         } else {
-            showOutcome(frame, app.latest);
+            showOutcome(frame, app.latest, roundMode(app));
         }
         break;
     case Page::results: {
@@ -979,7 +1007,12 @@ void leaveScan(App& app) {
 }
 
 void startCapture(App& app, const session::Profile& profile, uint32_t now) {
-    if (!app.client.start(profile, now)) {
+    // A non-Beacon choice cannot start until the board confirms its mode list, as the hidden Start
+    // button on the list already shows. The Right gesture reaches here too, so gate it here as well.
+    if (app.captureMode != flipper::beaconModeIndex && app.client.modesPending()) {
+        return;
+    }
+    if (!app.client.start(profile, now, flipper::captureModes[app.captureMode].wireId)) {
         return;
     }
     app.submitted = profile;
@@ -1344,6 +1377,7 @@ void tick(void* context) {
             }
         }
         app.client.poll(now);
+        syncCaptureMode(app);
         if ((pending == Request::start || pending == Request::stop) &&
             app.client.link() == Link::lost && app.client.pending() != pending) {
             app.commandUnconfirmed = true;

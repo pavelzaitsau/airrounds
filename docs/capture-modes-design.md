@@ -5,11 +5,11 @@ capture behind a capture-mode contract on the ESP32 and behind a mode
 descriptor in the Flipper app, so a future mode needs no change to the
 round, the radio, the PCAP writer, or the journal. The requirement and the
 screens are in [Capture modes on Flipper](ui-ux/capture-modes.md). The wire
-format of the reserved commands is in the [UART protocol](uart.md#reserved-capture-modes).
+format of the reserved commands is in the [UART protocol](uart.md#capture-modes).
 
-Phase T10 built steps R1 to R4 below. Beacon behaves as before: the existing
-host tests pass unchanged, except the menu checks in the UI emulator that
-R4 updates. The protocol reservation, step R5, is documentation only.
+Phase T10 built steps R1 to R4 below, and phase T11 built step R5 with the EAPOL
+mode. Beacon behaves as before: the existing host tests pass unchanged, except
+the menu and status checks that R4 and R5 update.
 
 ## Components after the refactoring
 
@@ -19,7 +19,7 @@ R4 updates. The protocol reservation, step R5, is documentation only.
 | `BeaconMode` | `firmware/esp32/session/beacon_mode.h` | The T8 beacon capture. It wraps `PassiveSession` and changes none of its logic. |
 | Shared PCAP writer | `firmware/esp32/storage/pcap_record.h` | One sealed PCAP per visit, the frame-type check, and the closed-file receipt. |
 | `PassiveVisit` | `firmware/esp32/airrounds_uart/passive_visit.h` | Radio, receive filter, queue, card mount, journal, and scan. It calls the mode and the writer. |
-| `PassiveRound` | `firmware/esp32/uart/passive_round.h` | Visit order, round deadline, and point results. Unchanged. |
+| `PassiveRound` | `firmware/esp32/uart/passive_round.h` | Visit order, round deadline, and point results. It takes the mode of a round and sets the per-mode budget: 10 s per point for Beacon, 60 s for EAPOL. |
 | Mode descriptor | `flipper/capture_mode.h` | Labels, availability, and the meaning of success for each mode. |
 | Capture mode screen | `flipper/airrounds.cpp` | The menu item, the screen, the locks, and the local choice. |
 
@@ -36,7 +36,7 @@ graph TD
   Wire --> Round[PassiveRound]
   Round -->|VisitBackend| Visit[PassiveVisit: radio, filter, card, journal, scan]
   Visit -->|CaptureMode| Beacon[BeaconMode]
-  Visit -.->|future| TodoA[Todo A]
+  Visit -->|CaptureMode| Eapol[EapolMode]
   Visit -.->|future| TodoB[Todo B]
   Visit --> Writer[Shared PCAP writer and receipt]
 ```
@@ -57,8 +57,8 @@ graph TD
 
 The mode owns the frame buffers. It sizes them at compile time, because the
 callback cannot allocate. A mode that needs more memory than the board has
-free must say so in its admission entry. The current firmware uses 52,160 of
-65,536 bytes of global RAM.
+free must say so in its admission entry. The current firmware uses 54,256 of
+65,536 bytes of global RAM, including the EAPOL mode's four 512-byte buffers.
 
 ### Frame types
 
@@ -86,9 +86,9 @@ that `record(index)` returns them, each with its own timestamp. The receipt
 covers the whole file. A set with zero records creates no file.
 
 The visit still owns one file: `visit-<boot>-<session>-<slot>.pcap`. The Mac
-check `tools/mac/check_pcap.py` accepts only a beacon or a probe response for
-the BSSID today. A mode that saves other frames needs its own Mac criterion
-before its results count as verified.
+check `tools/mac/check_pcap.py` accepts a beacon or a probe response for the
+BSSID, or with `--eapol` the EAPOL-Key handshake frames for it. A mode that saves
+other frames needs its own Mac criterion before its results count as verified.
 
 ### Results
 
@@ -111,8 +111,9 @@ or the card mount fails. The journal records the same result as the reply.
 `flipper/capture_mode.h` holds one `CaptureModeInfo` per mode: the label of
 every slot in the scan path, the meaning of success, the wire ID, and two
 flags. `implied` marks a mode that every board supports. `implemented` marks
-a mode the app can run. Beacon is both. Todo A and Todo B are neither, so the
-screen shows them with **Soon**.
+a mode the app can run. Beacon is both. EAPOL is implemented but not implied, so
+the screen offers it only once the board lists it. Todo B is neither, so the
+screen shows it with **Soon**.
 
 | Function | Rule |
 | --- | --- |
@@ -120,37 +121,32 @@ screen shows them with **Soon**.
 | `modeOf(wireId)` | The descriptor for the mode the board reports. An unknown ID returns the neutral labels. |
 | `pointResult`, `pointDetail` | Take the descriptor and map a point result to its label slot by the meaning of success. |
 
-The app runs every round as Beacon until the protocol carries a mode, because
-no board reports one. `roundMode` and `boardModes` in `flipper/airrounds.cpp`
-are the two places that read the board once it does.
+`roundMode` returns the mode a `round_status_mode` reply reports for the round,
+and the chosen mode until the first such reply names it. `boardModes` returns the
+IDs the board lists. Both live in `flipper/airrounds.cpp`.
 
-The progress counter counts `saved` points. An absence mode needs digit `5`
-to count its successes. The counter changes with step R5.
+The progress counter counts a point as a success by the mode's meaning:
+`savedPoints` counts `saved` for a frame-found mode such as Beacon or EAPOL, and
+digit `5` (`absence_confirmed`) for a future absence mode.
 
 ## Protocol reservation
 
-The [UART protocol](uart.md#reserved-capture-modes) reserves feature bit 5,
-the `modes` read command, an optional `mode <id>` tail on `round`, the
-`round_status_mode` read command, and result digit `5`. No board or app
-implements them yet.
+The [UART protocol](uart.md#capture-modes) defines feature bit 5, the
+`modes` read command, an optional `mode <id>` tail on `round`, the
+`round_status_mode` read command, and result digit `5`. The board and the app
+implement them.
 
-The existing replies keep their formats. The Flipper parser
-`readReplyDetails` in `firmware/esp32/uart/uart_reply.h` requires `aps` right
-after `journal` and `interrupted`, and it rejects a result digit above `4`. A
-new field in an existing reply would make the current app drop the reply and
-report a lost link. So the mode travels only in new commands.
+The Flipper parser `readReplyDetails` in `firmware/esp32/uart/uart_reply.h`
+parses the `mode <id>` marker before `aps`, under feature bit 5, and accepts
+result digit `5` only in a reply that carried that marker. Every other reply
+keeps the digit-`4` ceiling.
 
-The reply budget is 239 bytes from `!` through the line feed
-(`wireReplyCapacity` = 240 with the terminator). The board appends the round
-fields by command, whatever the reply code, so a rejected read also carries
-them. A `round_status_mode` reply with code `unsupported_version`, state
-`complete`, result `not_observed`, `journal failed`, `interrupted 0`,
-`mode 00`, and five points takes exactly 239 bytes. Today's longest
-`round_status_detail` reply takes 231 bytes.
-
-So the reservation leaves no spare byte. Before R5 adds `mode` or any later
-field, it must keep the round fields off a rejected reply, or the board drops
-that reply and the client reports a lost link.
+The board keeps the round fields off a rejected reply, so a non-`ok` reply ends
+at the feature byte. A host test builds the longest `round_status_mode` reply for
+every reply code and asserts that each fits `wireReplyCapacity` (240 with the
+terminator); the longest measured reply is 223 bytes. Without the drop, a
+rejected `round_status_mode` reply with the full round fields would leave no spare
+byte, and the client would report a lost link.
 
 ## Admission checklist
 
@@ -177,6 +173,47 @@ the mode is built. A mode without an entry stays unavailable.
 - Legal basis: an own network, or a network whose owner permits the test in
   writing, under the scope and limits in [acceptable use](acceptable-use.md).
 
+### EAPOL mode
+
+The mode records the EAPOL-Key frames of the WPA 4-way handshake for the round's
+target access point.
+
+- **Receive only.** The mode needs no transmission. The contract has no transmit
+  call, and the mode adds none. It waits for a client to join on its own and
+  records the handshake the join produces. It never forces a reconnect.
+- **Frame types.** The mode declares `dataFrames` only. An EAPOL frame is a data
+  frame that carries the IEEE 802.1X ethertype `0x88 0x8e` after its LLC/SNAP
+  header. The receive filter passes `WIFI_PROMIS_FILTER_MASK_DATA`. The mode
+  needs no management or control frames.
+- **Records.** The mode saves a chain of one to four frames, one per handshake
+  message held. Each frame buffer is 512 bytes, and the mode keeps four of them,
+  so the chain costs 2,048 bytes of static RAM plus the per-message size and
+  timestamp. The mode drops a frame larger than 512 bytes and never truncates it,
+  so the PCAP never holds a partial record. `make embedded` is the memory gate.
+- **Identifiers.** The PCAP holds the whole EAPOL frames, so the target BSSID,
+  the client MAC address, and the EAPOL-Key fields reach the card. The journal
+  records the target BSSID and the channel, as for Beacon. The Flipper screen
+  shows the per-point result label only. No client MAC address reaches the
+  screen.
+- **Target.** The mode drops every frame whose BSSID, taken by the DS bits, is
+  not the access point the visit targets. It drops a 4-address WDS frame, which
+  has no single BSSID.
+- **Payload.** The mode decrypts nothing and derives no key, PMK, PTK, PMKID, or
+  passphrase. It saves only the raw frame bytes. Those bytes carry key-derived
+  values: message 1 can carry the PMKID, and messages 2 to 4 carry the MIC.
+  Either value allows an offline guess of the passphrase, so
+  [acceptable use](acceptable-use.md#capture-modes-in-scope) treats the capture
+  as being as sensitive as the passphrase, and
+  [data handling](acceptable-use.md#data-handling) governs it.
+- **Evidence.** A point succeeds when the mode saves at least one EAPOL-Key frame
+  for the target; the point result `saved` reports that saved frame, not a
+  completed join. The Mac check `tools/mac/check_pcap.py --eapol` confirms that
+  every saved frame is an EAPOL-Key frame for the target BSSID. It reports which
+  handshake messages the file holds per client, and whether one client completed
+  a join.
+- **Legal basis.** An own network, or a network whose owner permits the test in
+  writing, under the scope and limits in [acceptable use](acceptable-use.md).
+
 ## Invariants
 
 The refactoring keeps what the [security assurance gap](t9.md#security-assurance-gap)
@@ -184,6 +221,8 @@ relies on.
 
 - The radio starts in `WIFI_MODE_NULL` with a promiscuous receive callback.
 - The firmware source has no frame-transmit call such as `esp_wifi_80211_tx`.
+  `tests/mac/test_receive_only.py` fails the build on an unreviewed radio call
+  or a non-`WIFI_MODE_NULL` radio mode under `firmware/esp32/`.
 - The receive filter passes the declared frame types only. For Beacon and
   for the scan it passes management frames only, as before.
 - `onFrame` runs under `receiveLock_` in the Wi-Fi callback. A mode that
@@ -202,11 +241,11 @@ invariants above hold for such a mode too.
 | R2 | Built in T10 | `PassiveVisit` calls the mode and the writer and sets the receive filter from `needs()`. The ESP32 image builds. |
 | R3 | Built in T10 | The Flipper descriptor and labels from it. The screens show the same Beacon labels. |
 | R4 | Built in T10 | The **Capture mode** menu item, the menu scroll, the screen, its locks, and the reset of point results on a change. The UI emulator checks the menu, the screen, and the Board state unknown and Session active locks. `capture_mode_labels_test.cpp` checks every row of the lock table, including Scan active, which no screen can reach while a scan runs. |
-| R5 | Reserved | Feature bit 5, `modes`, the `mode` tail, `round_status_mode`, digit `5`, **Mode pending**, and the return to Beacon. |
+| R5 | Built in T11 | Feature bit 5, `modes`, the `mode` tail, `round_status_mode`, digit `5`, **Mode pending**, and the return to Beacon. |
 | R6 | With the first mode that needs it | `poll(nowUs, context)` for work outside the callback, and a `ModeContext` with `tune(channel)` and `note(key, value)`. Time spent in `tune` counts against the point budget and the T8 fair share. |
 
-R5 and R6 come with the first real mode. Building them now would add code
-that no mode uses and no test can reach on hardware.
+T11 built R5 with the EAPOL mode. R6 comes with the first mode that needs work
+outside the receive callback; building it now would add code that no mode uses.
 
 ## Hardware check
 
@@ -216,20 +255,23 @@ requirement specifies, and both saved a Beacon round. The
 [T10 acceptance report](t10.md) lists the builds, the evidence, and the open
 checks.
 
+## Built tests for R5
+
+T11 built these; they run under `make check`.
+
+- Parse the `mode` tail, and return `conflict` on a repeat with another mode.
+- A board without bit 5 stays on Beacon and gets no `modes` read.
+- Labels follow `mode <id>` from the reply after the app reopens.
+- Start is hidden and the list shows **Mode pending** until the `modes` reply.
+- Stop in a non-Beacon round after a confirmed absence keeps the link: the
+  `round_stop` reply carries `1`, and `round_status_mode` carries `5`.
+- A board flashed without bit 5 returns the choice to Beacon without a `modes`
+  read.
+- The source check `tests/mac/test_receive_only.py` fails on a transmit call or
+  a non-`WIFI_MODE_NULL` radio mode under `firmware/esp32/`.
+
 ## Future tests
 
-- R5: parse the `mode` tail, and return `conflict` on a repeat with another
-  mode.
-- R5: a board without bit 5 stays on Beacon and gets no `modes` read.
-- R5: labels follow `mode <id>` from the reply after the app reopens.
-- R5: Start is hidden and the list shows **Mode pending** until the `modes`
-  reply arrives.
-- R5: Stop in a non-Beacon round after a confirmed absence keeps the link.
-  The `round_stop` reply carries `1`, and `round_status_mode` carries `5`.
-- R5: a board flashed without bit 5 returns the choice to Beacon without a
-  `modes` read.
-- Source check: a test fails when `firmware/esp32/**` contains a transmit
-  call.
 - Each new mode: the writer refuses its undeclared types, and the Mac check
   accepts its files.
 
@@ -249,6 +291,5 @@ checks.
 
 | Question | Needed before |
 | --- | --- |
-| The names and the behaviour of Todo A and Todo B | The first real mode |
+| The name and the behaviour of Todo B | The next real mode |
 | The evidence that the Mac checks for a confirmed absence | The first absence mode |
-| Which control or data frames a future mode needs | Its admission entry |

@@ -14,7 +14,7 @@ FLIPPER_OWN_STACK_SHARE = 2
 # GCC cannot follow a call through a function pointer. Each indirect call site
 # names its possible targets; an unlisted site fails the check.
 FLIPPER_INDIRECT_TARGETS = {
-    "SessionClient::request": ("App::send",),
+    "SessionClient::sendFrame": ("App::send",),
 }
 
 # airrounds_uart globals and static buffers, in bytes of ESP32-S2 data RAM.

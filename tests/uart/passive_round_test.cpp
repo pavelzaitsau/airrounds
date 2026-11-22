@@ -62,6 +62,8 @@ public:
     VisitStart start(const Target& target, const VisitBudget& budget) override {
         assert(!receiving_);
         ++setupCount;
+        lastRoundDurationUs = budget.round.durationUs;
+        lastShareUs = budget.shareAt(now_ + setupDelayUs);
         now_ += setupDelayUs;
         setupDelayUs = 0;
         const auto shareUs = budget.shareAt(now_);
@@ -108,11 +110,20 @@ public:
         visit_.receive(frame.data(), frame.size(), target.channel, now_ - startedUs_);
     }
 
+    void selectMode(uint8_t modeId) override {
+        ++selectCount;
+        lastModeId = modeId;
+    }
+
     void advance(uint64_t us) { now_ += us; }
     void expire() { now_ = startedUs_ + PassiveSession::windowUs; }
     bool holdSave = false;
     uint64_t setupDelayUs = 0;
     unsigned setupCount = 0;
+    uint64_t lastRoundDurationUs = 0;
+    uint64_t lastShareUs = 0;
+    uint8_t lastModeId = beaconModeId;
+    unsigned selectCount = 0;
     uint8_t channel() const { return visit_.channel(); }
     bool hasSample() const { return visit_.hasSample(); }
 
@@ -454,6 +465,46 @@ const char* directoryProblem(int argc, char** argv) {
 
 } // namespace
 
+void checkPerModeBudget(const char* directory) {
+    session::Profile one;
+    assert(one.add(first));
+    {
+        Visit visit(directory);
+        PassiveRound round(visit);
+        assert(round.start({boot, 30}, one)); // Default mode is Beacon.
+        assert(visit.selectCount == 1 && visit.lastModeId == beaconModeId);
+        assert(round.status().mode == beaconModeId);
+        // A one-point Beacon round keeps the T10 10 s budget and share.
+        assert(visit.lastRoundDurationUs == 10000000);
+        assert(visit.lastShareUs == 10000000);
+    }
+    {
+        Visit visit(directory);
+        PassiveRound round(visit);
+        assert(round.start({boot, 31}, one, eapolModeId));
+        assert(visit.selectCount == 1 && visit.lastModeId == eapolModeId);
+        assert(round.status().mode == eapolModeId);
+        // A one-point EAPOL round gets 60 s.
+        assert(visit.lastRoundDurationUs == 60000000);
+        assert(visit.lastShareUs == 60000000);
+    }
+    session::Profile five;
+    for (uint8_t index = 1; index <= 5; ++index) {
+        assert(five.add({{2, 0, 0, 0, 0, index}, 6}));
+    }
+    Visit visit(directory);
+    PassiveRound round(visit);
+    assert(round.start({boot, 32}, five, eapolModeId));
+    // Five points share 300 s; the fair share gives the first point 60 s.
+    assert(visit.lastRoundDurationUs == 300000000);
+    assert(visit.lastShareUs == 60000000);
+    // A start after an EAPOL round returns the visit to Beacon.
+    round.stop();
+    round.poll();
+    assert(round.start({boot, 33}, one));
+    assert(visit.lastModeId == beaconModeId && visit.lastRoundDurationUs == 10000000);
+}
+
 int main(int argc, char** argv) try {
     if (const char* problem = directoryProblem(argc, argv)) {
         std::cerr << "passive_round_test: " << problem << "; pass an empty temporary directory\n";
@@ -461,6 +512,7 @@ int main(int argc, char** argv) try {
     }
     alarm(30); // A loop that never ends fails the test instead of hanging it.
     checkVisitShares();
+    checkPerModeBudget(argv[1]);
     checkRound(argv[1], 1, {6, 6}, true);
     checkRound(argv[1], 2, {1, 11}, true);
     checkRound(argv[1], 3, {6, 11}, false);

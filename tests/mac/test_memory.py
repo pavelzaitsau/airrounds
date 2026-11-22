@@ -24,7 +24,7 @@ def edge(source, target):
 APP = "int32_t airrounds_app(void*)"
 TICK = "void {anonymous}::tick(void*)"
 PARSE = "bool airrounds::uart::readReply(const char*, Reply&)"
-REQUEST = "void airrounds::flipper::SessionClient::request(Request)"
+REQUEST = "void airrounds::flipper::SessionClient::sendFrame(Request, const char*, const Profile*)"
 SEND = "static void {anonymous}::App::send(void*, const char*, size_t)"
 
 
@@ -54,7 +54,7 @@ class MemoryBudgetTest(unittest.TestCase):
         self.assertEqual(self.stack(self.graph()), 50 + 200 + 100)
 
     def test_indirect_call_follows_listed_target(self):
-        # tick > request > App::send outweighs tick > readReply when the parser frame is small.
+        # tick > sendFrame > App::send outweighs tick > readReply when the parser frame is small.
         self.assertEqual(self.stack(self.graph(parse_size=10)), 50 + 200 + 40 + 30)
 
     def test_budget_is_half_the_thread_stack(self):

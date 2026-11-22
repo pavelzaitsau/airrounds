@@ -31,8 +31,8 @@ Each row shows a network name. Identical names receive a number, and the scan
 screen keeps BSSIDs and channels out of the interface. The list preserves
 matching selections and outcomes during rescans while AirRounds is open.
 
-**Capture mode** chooses the mode of the next round. Beacon is the only
-available mode; **Todo A** and **Todo B** show **Soon**. See
+**Capture mode** chooses the mode of the next round. Beacon is always available;
+**EAPOL** is available once the board lists it; **Todo B** shows **Soon**. See
 [Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware** and
 **Test board** are empty menu entries. **About** shows the app version and the
 board firmware version. An older board with scan support shows **Unknown**.

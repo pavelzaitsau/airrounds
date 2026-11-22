@@ -275,6 +275,7 @@ def tests(mode):
     captures = {
         "pcap_capture_test": ("first.pcap", []),
         "passive_session_test": ("passive.pcap", ["--bssid", "02:00:00:00:00:01"]),
+        "capture_mode_test": ("eapol.pcap", ["--eapol", "--bssid", "02:00:00:00:00:01"]),
     }
     for source in SOURCES:
         binary = directory / source.stem

@@ -91,8 +91,8 @@ over a budget. The table lists the budgets for the current source.
 | Check | Gate | Budget | Current use |
 | --- | --- | --- | --- |
 | Heap leaks in host tests and the Flipper UI emulator | `make check` | None at exit | None |
-| Worst AirRounds call path on the Flipper app thread | `make embedded` | 2,048 B, half of `stack_size` | 1,448 B |
-| Global and static RAM of `airrounds_uart` | `make embedded` | 65,536 B | 52,160 B |
+| Worst AirRounds call path on the Flipper app thread | `make embedded` | 2,048 B, half of `stack_size` | 1,476 B |
+| Global and static RAM of `airrounds_uart` | `make embedded` | 65,536 B | 54,256 B |
 | Largest stack frame in `airrounds_uart` | `make embedded` | 1,024 B | 656 B in `storage::writePcapRecords` |
 | Stack frame of `writeSessionJournal` | `make embedded` | 2,560 B | 2,512 B |
 

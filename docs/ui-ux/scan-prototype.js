@@ -6,7 +6,7 @@
 const scanNetworks = ["TELEPORT", "Studio", "Guest", "Workshop", "Loft", "Atlas"];
 const captureModes = [
     { id: "beacon", label: "Beacon" },
-    { id: "todoA", label: "Todo A" },
+    { id: "eapol", label: "EAPOL" },
     { id: "todoB", label: "Todo B" },
 ];
 const menuItems = [

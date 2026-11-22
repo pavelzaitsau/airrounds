@@ -1963,23 +1963,20 @@ void captureModeChoice() {
         layout("Pb 4,11 Capture mode\n"
                "box 1,13 124x11\n"
                "Sw 5,22 * Beacon\n"
-               "Sb 5,33 Todo A\n"
-               "Sb 101,33 Soon\n"
+               "Sb 5,33 EAPOL\n"
                "Sb 5,44 Todo B\n"
                "Sb 101,44 Soon\n");
 
-        // A placeholder mode keeps Beacon and says why until the next key press.
+        // Todo B is not implemented: choosing it keeps Beacon and says why.
+        tap(InputKeyDown);
         tap(InputKeyDown);
         tap(InputKeyOk);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Not available yet");
-        tap(InputKeyDown);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
-        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Not available yet");
         tap(InputKeyUp);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon");
 
-        // Back changes nothing; OK on Beacon returns with focus on Capture mode.
-        tap(InputKeyBack);
+        // EAPOL is available: choosing it selects it and returns with focus on Capture mode.
+        tap(InputKeyOk);
         layout("Pb 4,11 AirRounds\n"
                "Sb 5,22 Scan area\n"
                "box 1,24 124x11\n"
@@ -1987,22 +1984,24 @@ void captureModeChoice() {
                "Sb 5,44 Flash board hardware\n"
                "Sb 5,55 Test board\n"
                "Sb 123,63 v\n");
-        tap(InputKeyOk); // Focus starts on the current mode.
+        tap(InputKeyOk); // Reopen; focus starts on the chosen mode.
+        screen("Capture mode", "Beacon", "* EAPOL", "Todo B", "Soon");
+
+        // Choosing Beacon again returns with focus on Capture mode.
+        tap(InputKeyUp);
         tap(InputKeyOk);
         screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
         tap(InputKeyOk);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon");
 
         // An unknown board state locks the choice; the lock ends when the board answers again.
         board.goOffline();
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
-               "Board state unknown");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Board state unknown");
         tap(InputKeyDown);
         tap(InputKeyOk);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
-               "Board state unknown");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Board state unknown");
         board.comeBack();
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon");
     };
     runApp();
 }
@@ -2018,22 +2017,61 @@ void captureModeLockedDuringRound() {
                "v");
         tap(InputKeyDown);
         tap(InputKeyOk);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Session active");
         tap(InputKeyDown);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Session active");
         tap(InputKeyUp);
         tap(InputKeyOk);
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Session active");
 
         // A lost link during the round hides the last known state behind the unknown one.
         board.goOffline();
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon",
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon",
                "Board state unknown");
         board.comeBack();
-        screen("Capture mode", "* Beacon", "Todo A", "Soon", "Todo B", "Soon", "Session active");
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon", "Session active");
         tap(InputKeyBack);
         screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
                "v");
+    };
+    runApp();
+}
+
+// Choosing EAPOL and starting a round: the list heads with the EAPOL title, the round line carries
+// the mode 01 tail, and the saved point shows the EAPOL success label.
+void captureModeEapolRound() {
+    Board board(false, true);
+    cardWith({});
+    emu::scenario = [&] {
+        board.advance(8);
+        // Open the Capture mode screen and select EAPOL, landing home on Capture mode.
+        tap(InputKeyUp);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Capture mode", "* Beacon", "EAPOL", "Todo B", "Soon");
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        // Scan; the network list heads with the EAPOL title.
+        tap(InputKeyUp);
+        tap(InputKeyOk);
+        board.advance(60);
+        screen("Handshakes", "0/5 selected", "[ ] TELEPORT", "[ ] Studio", "[ ] Guest", "v",
+               "Scan");
+        tap(InputKeyOk);
+        screen("Handshakes", "1/5 selected", "[x] TELEPORT", "[ ] Studio", "[ ] Guest", "v", "Scan",
+               "Start (1)");
+        board.sent.clear();
+        tap(InputKeyRight);
+        assert(board.sent.find(" mode 01\n") != std::string::npos);
+        board.advance(10);
+        screen("Capture", "Captured 0/1", "Listening", "TELEPORT", "Stop");
+        board.receiver.observed = true;
+        board.receiver.outcome = Outcome::saved;
+        board.advance(15);
+        screen("Handshakes", "0/5 selected", "+ TELEPORT", "Saved", "[ ] Studio", "[ ] Guest", "v",
+               "Scan");
     };
     runApp();
 }
@@ -3282,6 +3320,7 @@ int main() {
     scanLayouts();
     captureModeChoice();
     captureModeLockedDuringRound();
+    captureModeEapolRound();
     freshReadIdsEachRun();
     openingShowsActiveSessionOnce();
     backWhileStarting();

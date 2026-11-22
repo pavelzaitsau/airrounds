@@ -9,8 +9,8 @@
 namespace airrounds {
 namespace session {
 
-// Two hex digits on the wire once the capture-mode command is built; Beacon is 00.
-enum class CaptureModeId : uint8_t { beacon = 0 };
+// Two hex digits on the wire once the capture-mode command is built; Beacon is 00, EAPOL is 01.
+enum class CaptureModeId : uint8_t { beacon = 0, eapol = 1 };
 
 // found maps to point result 2 after the shared writer verifies the file, not_observed to 1,
 // error to 3. absence_confirmed keeps result 1 in the current replies: digit 5 is reserved for

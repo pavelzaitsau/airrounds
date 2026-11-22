@@ -60,7 +60,55 @@ def observed_ssid(frame, bssid):
     return ssid if any(ssid) else b""
 
 
-def check_records(stream, bssid, verify_receipt):
+def eapol_header_len(frame):
+    # IEEE 802.11 MAC header: 24, plus 2 for a QoS data subtype, plus 4 for HT Control.
+    length = 24
+    if frame[0] & 0x80:
+        length += 2
+        if frame[1] & 0x80:
+            length += 4
+    return length
+
+
+def eapol_message(frame, bssid):
+    """The (client, message) of an EAPOL-Key handshake frame for bssid, or None when the frame is
+    not a placeable pairwise EAPOL-Key frame for that BSSID. The BSSID and client come from the DS
+    bits, the same map as the firmware; nothing is decrypted."""
+    if len(frame) < 24 or frame[0] & 0x0C != 0x08 or frame[1] & 0x40:
+        return None # Not a plaintext data frame.
+    ds = frame[1] & 0x03
+    if ds == 0x01:   # ToDS: client to AP (messages 2 and 4).
+        ap, client = frame[4:10], frame[10:16]
+    elif ds == 0x02: # FromDS: AP to client (messages 1 and 3).
+        ap, client = frame[10:16], frame[4:10]
+    elif ds == 0x00: # Same BSS.
+        ap, client = frame[16:22], frame[10:16]
+    else:            # 4-address WDS has no single BSSID.
+        return None
+    if ap != bssid:
+        return None
+    header = eapol_header_len(frame)
+    if len(frame) < header + 10:
+        return None
+    if frame[header:header + 6] != b"\xaa\xaa\x03\x00\x00\x00" or frame[header + 6:header + 8] != b"\x88\x8e":
+        return None
+    if frame[header + 9] != 3: # EAPOL packet type 3 is EAPOL-Key.
+        return None
+    offset = header + 8
+    if len(frame) < offset + 7:
+        return None
+    key_info = (frame[offset + 5] << 8) | frame[offset + 6]
+    if not key_info & 0x0008: # Key Type clear: a group rekey, not a pairwise handshake message.
+        return None
+    ack, mic, secure = bool(key_info & 0x0080), bool(key_info & 0x0100), bool(key_info & 0x0200)
+    message = {(True, False, False): 1, (False, True, False): 2,
+               (True, True, True): 3, (False, True, True): 4}.get((ack, mic, secure))
+    if message is None:
+        return None
+    return bytes(client), message
+
+
+def check_records(stream, bssid, verify_receipt, eapol=False):
     magic = read_exact(stream, 4, "file magic")
     if magic not in FORMATS:
         raise CheckError("unsupported: expected classic PCAP")
@@ -81,6 +129,7 @@ def check_records(stream, bssid, verify_receipt):
     record_header = struct.Struct(order + "IIII")
     count = 0
     ssid = None
+    clients = [] # (client_address, {messages}) in order of first appearance, for the EAPOL check.
     while record := stream.read(record_header.size):
         count += 1
         if len(record) != record_header.size:
@@ -97,12 +146,24 @@ def check_records(stream, bssid, verify_receipt):
         size += len(record) + len(frame)
         if verify_receipt:
             crc = zlib.crc32(frame, zlib.crc32(record, crc))
-        if bssid is not None and not ssid and captured == original:
+        if eapol:
+            # Every record must be a placeable EAPOL-Key frame for the target BSSID; the firmware
+            # writes nothing else, so a failure here points at a writer or a mode defect.
+            placed = eapol_message(frame, bssid)
+            if placed is None:
+                raise CheckError(f"unsupported: record {count} is not an EAPOL-Key frame for the BSSID")
+            client, message = placed
+            entry = next((messages for address, messages in clients if address == client), None)
+            if entry is None:
+                clients.append((client, {message}))
+            else:
+                entry.add(message)
+        elif bssid is not None and not ssid and captured == original:
             candidate = observed_ssid(frame, bssid)
             if candidate is not None:
                 ssid = candidate
 
-    return LINK_TYPES[link_type], count, size, crc, ssid
+    return LINK_TYPES[link_type], count, size, crc, ssid, clients
 
 
 def check_receipt(path, size, crc):
@@ -128,17 +189,39 @@ def parse_bssid(value):
     return address
 
 
+def report_eapol(bssid, count, size, link_type, clients, has_receipt):
+    """Print the handshake messages per client and return the exit code: 0 for a completed join
+    (messages 3 and 4 from one client), 3 for the target with no completed handshake. Clients are
+    numbered in order of first appearance; no client MAC address is printed."""
+    address = bssid.hex(":")
+    receipt = ", receipt matches" if has_receipt else ""
+    print(f"EAPOL: {count} record(s), {size} bytes, {link_type}, BSSID {address}{receipt}")
+    joined = False
+    for index, (_client, messages) in enumerate(clients, start=1):
+        print(f"client {index}: messages " + ", ".join(str(message) for message in sorted(messages)))
+        if {3, 4} <= messages:
+            joined = True
+    if joined:
+        return 0
+    print(f"no completed handshake: BSSID {address}", file=sys.stderr)
+    return 3
+
+
 def main():
     parser = argparse.ArgumentParser(description="Check a saved AirRounds PCAP.")
     parser.add_argument("capture", type=Path, help="classic PCAP file")
     parser.add_argument("--receipt", type=Path, help="matching T2 .pcap.ok file")
     parser.add_argument("--bssid", type=parse_bssid, help="access point MAC address to check")
+    parser.add_argument("--eapol", action="store_true",
+                        help="check EAPOL-Key handshake frames for --bssid")
     args = parser.parse_args()
+    if args.eapol and args.bssid is None:
+        parser.error("--eapol needs --bssid")
 
     try:
         with args.capture.open("rb") as stream:
-            link_type, count, size, crc, ssid = check_records(
-                stream, args.bssid, args.receipt is not None
+            link_type, count, size, crc, ssid, clients = check_records(
+                stream, args.bssid, args.receipt is not None, args.eapol
             )
         if args.receipt is not None:
             check_receipt(args.receipt, size, crc)
@@ -150,6 +233,10 @@ def main():
     except OSError as error:
         print(f"read error: {error}", file=sys.stderr)
         return 1
+
+    if args.eapol:
+        return report_eapol(args.bssid, count, size, link_type, clients,
+                            args.receipt is not None)
 
     context = ""
     if args.bssid is not None:

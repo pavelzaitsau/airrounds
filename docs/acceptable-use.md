@@ -49,20 +49,24 @@ The project provides no tool or instruction for post-processing saved frames,
 and does not encourage any. The Mac tool `tools/mac/check_pcap.py` checks a
 transferred capture. It verifies the file structure and the receipt. With
 `--bssid`, it confirms that the file holds a beacon from that access point and
-reports its SSID. Decryption and key derivation stay prohibited; see
-[Prohibited use](#prohibited-use).
+reports its SSID. With `--eapol` and `--bssid`, it confirms that every record is
+an EAPOL-Key frame for that access point, reports which handshake messages the
+file holds per client, and reports whether one client completed a handshake. It
+reads the 802.11 header, the EAPOL packet type, and the key-info flags; it reads
+the client address only to group frames by client, and prints no client MAC
+address. It reads no nonce, MIC, or key data. Decryption and key derivation stay
+prohibited; see [Prohibited use](#prohibited-use).
 
 ## Capture modes in scope
 
-The shipped capture is beacon frames only. The capture-mode contract lets the
-author add more advanced modes later, each under the same four limits below.
+The shipped capture modes are Beacon and EAPOL. The capture-mode contract lets
+the author add more advanced modes later, each under the same four limits below.
 See the [capture modes design](capture-modes-design.md#admission-checklist) for
 the contract and the admission checklist a new mode must pass.
 
-An example of an advanced mode is the capture of the EAPOL frames of the WPA
-4-way handshake. The shipped firmware has no such mode. Handshake capture shows
-what an attacker could collect toward an offline password-cracking attempt, so
-the operator can judge that risk on their own networks.
+The EAPOL mode captures the EAPOL frames of the WPA 4-way handshake. Handshake
+capture shows what an attacker could collect toward an offline password-cracking
+attempt, so the operator can judge that risk on their own networks.
 
 Handshake and EAPOL capture, and every other advanced mode, is in scope only
 under all four limits below. The same limits bind every current and future mode.
@@ -168,22 +172,24 @@ that proves it, so a reviewer can check the claim against the code.
 | --- | --- | --- |
 | Receive-only radio | The radio starts in `WIFI_MODE_NULL` with a promiscuous receive callback. The source adds no transmit path. | `PassiveVisit::openRadio` in `firmware/esp32/airrounds_uart/passive_visit.h`; [T9 security assurance gap](t9.md#security-assurance-gap) |
 | No transmit call | The firmware source holds no frame-transmit call such as `esp_wifi_80211_tx`. | A search of `firmware/esp32/` finds none; [capture modes design, Invariants](capture-modes-design.md#invariants) |
-| Build gate (planned, not built) | A planned host test fails the build when `firmware/esp32/**` contains a transmit call. The test does not exist yet. | [capture modes design, Future tests](capture-modes-design.md#future-tests) |
+| Build gate | A host test fails the build when `firmware/esp32/**` contains a transmit call or a non-`WIFI_MODE_NULL` radio mode, through an allowlist of the radio calls the firmware uses. | `tests/mac/test_receive_only.py` |
 | Declared frame types only | The receive filter and the PCAP writer pass only the frame types a mode declares. | `PassiveVisit::receiveFilter` in `passive_visit.h`; `writePcapRecords` in `firmware/esp32/storage/pcap_record.h` |
-| Visited access point only | Beacon drops every frame whose BSSID is not the access point it is visiting. | `PassiveSession::receive` in `firmware/esp32/session/passive_session.h`; [admission checklist](capture-modes-design.md#admission-checklist) for new modes |
+| EAPOL writer gate | A second, independent check keyed off the declared data type requires every data record to carry the EAPOL ethertype, so a parser defect in the mode cannot save another data frame. | `containsEapolEthertype` in `firmware/esp32/storage/pcap_record.h` |
+| Visited access point only | Beacon and EAPOL drop every frame whose BSSID is not the access point they are visiting. | `PassiveSession::receive` in `firmware/esp32/session/passive_session.h`; `EapolMode::onFrame` in `firmware/esp32/session/eapol_mode.h`; [admission checklist](capture-modes-design.md#admission-checklist) for new modes |
 | Scan writes no capture | A scan keeps beacons for the scan list and never mounts the microSD card. | `PassiveVisit::startScan`, `pollScan`, and `finishScan` in `passive_visit.h` |
 
 ## Known limits
 
-The no-transmission property rests on the source today, not on radio measurement
-or an automated gate. State the limits plainly, and do not overclaim.
+The no-transmission property rests on the source and a source-level build gate
+today, not on radio measurement. State the limits plainly, and do not overclaim.
 
 - The independent RF measurement that would confirm radio silence on the bench is
-  deferred. Until it runs, the no-transmission property rests on the source alone.
-  See [T9 security assurance gap](t9.md#security-assurance-gap).
-- The build gate that would fail the build on a transmit call is planned, not
-  built. Until it exists, manual source review is the only check. See
-  [capture modes design, Future tests](capture-modes-design.md#future-tests).
+  deferred. Until it runs, the no-transmission property rests on the source and
+  the build gate, not on a measurement. See
+  [T9 security assurance gap](t9.md#security-assurance-gap).
+- The build gate reads the source, not the built image. It fails on an unreviewed
+  radio call, but a transmit path through a call outside its allowlist namespaces
+  would need a reviewer to catch it. See `tests/mac/test_receive_only.py`.
 - The access point filter is a scope aid, not an enforced legal boundary. The
   operator selects the access points, so the operator is accountable for the
   choice.

@@ -233,16 +233,16 @@ void testJournalFile(const char* directory, const SessionReport& report) {
     assert(written);
     const auto log = contents(final);
     assert(log ==
-           std::string("format=airrounds-session-v2\nfirmware=") + airrounds::firmwareVersion +
-               " build=build-test revision=revision-test protocol=01 radio=passive\n"
+           std::string("format=airrounds-session-v3\nfirmware=") + airrounds::firmwareVersion +
+               " build=build-test revision=revision-test protocol=01 radio=passive mode=beacon\n"
                "boot=0000000000001234 session=00000001 state=stopped outcome=saved points=2\n"
                "started_us=100 ended_us=250 budget_us=20000000\n"
                "point=1 bssid=020000000001 channel=6 outcome=saved listen_started_us=100 "
-               "listen_ended_us=140 management_frames=12 accepted_beacons=3 "
+               "listen_ended_us=140 observed_frames=12 accepted_frames=3 "
                "filtered_frames=9 queue_overflows=2 bytes_written=86 verified_file_size=85 "
                "pcap=visit-0000000000001234-00000001-1.pcap\n"
                "point=2 bssid=020000000002 channel=11 outcome=none listen_started_us=0 "
-               "listen_ended_us=0 management_frames=0 accepted_beacons=0 filtered_frames=0 "
+               "listen_ended_us=0 observed_frames=0 accepted_frames=0 filtered_frames=0 "
                "queue_overflows=0 bytes_written=0 verified_file_size=0 pcap=-\n");
     assert(!std::ifstream(final + ".part"));
     const bool overwritten =
@@ -517,6 +517,28 @@ void testOverReportedReadFailsVerification(const char* directory, const SessionR
     checkFaultBlocksPublish<OverReportingReadFile>(directory, report, 19);
 }
 
+// An EAPOL (data) round records mode=eapol and the renamed counters, and filtered_frames does not
+// underflow: observedFrames counts the data frames, so acceptedFrames is at most observedFrames.
+void testEapolJournal(const char* directory) {
+    SessionReport report;
+    report.id = {0x1234, 20};
+    report.state = State::complete;
+    report.outcome = Outcome::saved;
+    report.status.mode = eapolModeId;
+    const bool added = report.status.profile.add({{2, 0, 0, 0, 0, 1}, 6});
+    assert(added);
+    report.status.results[0] = Outcome::saved;
+    VisitStatistics stats[airrounds::session::Profile::capacity]{};
+    stats[0] = {100, 57000000, 5, 1, 0, 300, 299}; // 5 observed, 1 accepted, 4 filtered.
+    const bool written =
+        writeSessionJournal(directory, report, stats, {"build-test", "revision-test"});
+    assert(written);
+    const auto body = contents(std::string(directory) + "/session-0000000000001234-00000014.log");
+    assert(body.find("format=airrounds-session-v3\n") != std::string::npos);
+    assert(body.find(" radio=passive mode=eapol\n") != std::string::npos);
+    assert(body.find(" observed_frames=5 accepted_frames=1 filtered_frames=4 ") != std::string::npos);
+}
+
 // The test writes fixed file names, so it needs a fresh directory of its own.
 const char* directoryProblem(int argc, char** argv) {
     if (argc != 2) {
@@ -562,5 +584,6 @@ int main(int argc, char** argv) {
     testPathsFitTheirBuffers();
     testJournalCapacity(argv[1]);
     testOverReportedReadFailsVerification(argv[1], report);
+    testEapolJournal(argv[1]);
     std::cout << "Session journal: format, checkpoint, faults, and capacity passed\n";
 }

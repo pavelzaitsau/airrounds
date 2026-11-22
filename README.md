@@ -1,17 +1,19 @@
 # AirRounds
 
 AirRounds is a passive, receive-only Wi-Fi capture tool for Flipper Zero and the
-ESP32-S2 Wi-Fi Devboard. It saves one beacon from each approved 2.4 GHz access
-point it observes, one to five per round, to microSD. Each beacon goes in its
-own PCAP file with a receipt, and a session log records the round. The source
-has no transmit, deauthentication, decryption, or key-derivation path. No RF
-measurement or automated gate confirms the absence of transmission yet; see
-[known limits](docs/acceptable-use.md#known-limits).
+ESP32-S2 Wi-Fi Devboard. It captures from each approved 2.4 GHz access point it
+visits, one to five per round, to microSD. Beacon mode saves one beacon per
+point; EAPOL mode saves the EAPOL-Key frames of the WPA 4-way handshake a joining
+client produces. Each capture goes in its own PCAP file with a receipt, and a
+session log records the round. The source has no transmit, deauthentication,
+decryption, or key-derivation path. No RF measurement confirms the absence of
+transmission on the bench yet; a host test fails the build on a transmit call in
+the firmware. See [known limits](docs/acceptable-use.md#known-limits).
 
 AirRounds is a personal project for the author's own noncommercial security
 research. The author runs it only on networks the author owns or has written
 permission to test. The author does not offer it as a product or for use by
-anyone else. The current version is v0.1.
+anyone else. The current version is v0.2.
 
 | Component | Language | Directory |
 | --- | --- | --- |

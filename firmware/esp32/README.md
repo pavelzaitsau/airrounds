@@ -121,10 +121,12 @@ listening. After each radio setup, the board divides the time left by
 the number of points still to visit. The current point gets at most
 that share. Slow setup or saves can shorten later visits.
 
-The round deadline is 10 s per selected point from the start of the
-round. At the deadline, the board stops accepting beacons and starts no
-more visits. It closes and checks any capture already in hand.
-A quiet point produces no file. A radio or SD error ends the round.
+The round deadline is 10 s per selected point in Beacon mode, and 60 s per
+point in EAPOL mode, from the start of the round. An EAPOL point keeps a
+3 s reserve for radio setup and the save, so it listens for at most its
+share minus 3 s. At the deadline, the board stops accepting the mode's
+frames and starts no more visits. It closes and checks any capture already
+in hand. A quiet point produces no file. A radio or SD error ends the round.
 Earlier save results stay available in UART status until the next round
 or a reboot. The PCAP files and receipts stay on the card.
 
@@ -136,18 +138,18 @@ See the [UART protocol][uart] for wiring, commands, and file names.
 
 Before listening, the firmware tries to write a session checkpoint to
 `session-<boot>-<session>.log.open` on microSD. It records the firmware
-version, the build, Git revision, UART version, passive mode, start time, time
-budget, and ordered BSSID and channel pairs. If the board resets mid-round, the
+version, the build, Git revision, UART version, passive radio, the capture mode,
+start time, time budget, and ordered BSSID and channel pairs. If the board resets mid-round, the
 checkpoint can be matched to any verified PCAPs by boot ID, session ID, and
 point order.
 
 At the end of the round the firmware writes `session-<boot>-<session>.log`.
 The final log also records the end time, overall result, and per-point
-results and statistics. These include the listening interval, management
-frames delivered to the receive callback, accepted matching beacons,
-filtered frames, write-queue overflows, bytes accepted by storage, verified
-PCAP size, and saved filename. Skipped points use `outcome=none` and zero
-counts.
+results and statistics. These include the listening interval, frames of the
+mode's declared type delivered to the receive callback (`observed_frames`),
+accepted frames (`accepted_frames`), filtered frames, write-queue overflows,
+bytes accepted by storage, verified PCAP size, and saved filename. Skipped
+points use `outcome=none` and zero counts.
 
 The writer syncs each staging file and reads it back byte for byte before
 publishing it. A leftover `.log.open.part` or `.log.part` can help diagnose
@@ -160,9 +162,13 @@ The round stays `finalizing` until the final log attempt finishes. Query
 if the board reports a journal failure. The PCAP result still reflects
 only the capture.
 
-The first line of a log names its format. Firmware v0.1 writes
-`format=airrounds-session-v2`, which adds the `firmware=` field to the second
-line. Earlier firmware wrote `format=airrounds-session-v1` without that field.
+The first line of a log names its format. Firmware v0.2 writes
+`format=airrounds-session-v3`, which adds the `mode=<name>` field to the second
+line (`beacon`, `eapol`, or `unknown`) and renames the per-point counters to
+`observed_frames` and `accepted_frames`. Firmware v0.1 wrote
+`format=airrounds-session-v2` with the `firmware=` field and the
+`management_frames` and `accepted_beacons` counters. Firmware before that wrote
+`format=airrounds-session-v1` without the `firmware=` field.
 
 `make embedded` sets the source build ID and Git revision. Set
 `AIRROUNDS_REVISION` to a full Git SHA when building an exported tree.

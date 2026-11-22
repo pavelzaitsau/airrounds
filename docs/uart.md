@@ -40,7 +40,7 @@ line feed. Replies to the original commands still fit in 127 bytes. Drop a reply
 | `code` | Result of the command. |
 | `state`, `result` | Current session state and overall result. |
 | `last_mutation` | Sixteen hex digits. The highest mutation request ID processed in this boot. |
-| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. Bit 2 supports the session journal status. Bit 3 supports scanning and five-point rounds. Bit 4 supports round interruption details. |
+| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. Bit 2 supports the session journal status. Bit 3 supports scanning and five-point rounds. Bit 4 supports round interruption details. Bit 5 supports capture modes. |
 
 Use lowercase hex throughout. In a `hello` reply, the board sends its own
 version and boot ID. Other replies echo both fields from the request.
@@ -80,7 +80,7 @@ Session IDs and mutation request IDs do not wrap within a boot.
 | `bad_target` | The address is zero or multicast, or the channel is outside 1 through 13. |
 | `unknown_session` | The command's scope does not match its allowed session ID. |
 | `busy` | The current visit is running or saving. |
-| `conflict` | The same request ID changed content, or the current session changed target. |
+| `conflict` | The same request ID changed content, or the current session changed target or capture mode on a retry. |
 | `stale_request` | A newer mutation request ID has already reached the board. |
 | `radio_error` | `scan_stop` could not shut down the scan receiver. |
 
@@ -91,7 +91,7 @@ Session IDs and mutation request IDs do not wrap within a boot.
 | `idle` | `none` | The board has not accepted a visit since boot. |
 | `running` | `none` | The board is listening. See [observation windows](#observation-windows) for the limits. |
 | `finalizing` | `none` | Reception has stopped. The save result is pending. |
-| `complete` or `stopped` | `saved` or `not_observed` | The visit ended on its own or by request. A saved PCAP has a verified receipt. A visit without a beacon produces no file. |
+| `complete` or `stopped` | `saved` or `not_observed` | The visit ended on its own or by request. A saved PCAP has a verified receipt. A visit that saved no frame of the round's mode produces no file. |
 | `error` | `radio_error` or `storage_error` | The radio or storage operation failed. |
 
 The board stops the radio before it starts SD work. Find the capture at
@@ -133,7 +133,7 @@ Use these commands when the board advertises feature bit 1.
 | Command | Scope | Arguments and effect |
 | --- | --- | --- |
 | `round` | Current session ID plus 1 | Send one to three BSSID and channel pairs in visit order, or up to five with feature bit 3. Use the same field widths as `start`. |
-| `round_stop` | Current nonzero session ID | Stop reception and save any beacon already in hand. Finish a save in progress and skip later visits. |
+| `round_stop` | Current nonzero session ID | Stop reception and save any frame of the round's mode already in hand. Finish a save in progress and skip later visits. |
 | `round_status` | Zero or current session ID | Read the current round and its results. Use a read request ID, as for `status`. |
 | `round_status_log` | Zero or current session ID | With feature bit 2, read the round results and microSD journal status. Use a read request ID and no arguments. |
 | `round_status_detail` | Zero or current session ID | With feature bit 4, read the round results and interruption detail. Includes journal status when bit 2 is set. Use a read request ID and no arguments. |
@@ -145,12 +145,13 @@ the board still listens on the channel in the request. It reports
 `not_observed` if it hears no matching beacon before the visit cutoff.
 A radio or storage error ends the round.
 
-The round commands append `aps` to the reply, followed by one field per
-access point in visit order. Each field has 15 lowercase hex digits. The
-first 12 are the BSSID, the next two are the channel, and the last is the
-visit result. An idle board appends only `aps`. For example,
+The round commands append `aps` to an OK reply, followed by one field per
+access point in visit order. A rejected reply, any non-`ok` code, carries no
+`aps`, `journal`, `interrupted`, or `mode` field. Each field has 15 lowercase hex
+digits. The first 12 are the BSSID, the next two are the channel, and the last is
+the visit result. An idle board appends only `aps`. For example,
 `aps 020000000001062 0200000000020b1` reports a save on channel 6 and
-no beacon on channel 11.
+no frame on channel 11.
 
 | Last digit | Visit result |
 | --- | --- |
@@ -198,7 +199,7 @@ receipt for each file. A round with one point uses the original file name.
 | `firmware` | Zero | Read request with no arguments. Reports the board firmware version. |
 
 An OK `firmware` reply appends `firmware <version>`, for example
-`firmware 0.1`. The version holds 1 to 15 characters, digits and dots only. No
+`firmware 0.2`. The version holds 1 to 15 characters, digits and dots only. No
 other field follows it. Firmware v0.1 is the first to answer this read, and no
 feature bit announces it. An older board answers `bad_request`.
 
@@ -212,14 +213,17 @@ status read, a failed version read does not count as a lost link.
 
 ## Observation windows
 
-Both `start` and `round` use the same listening limits. A visit starts with
-up to 5 s and can extend to 7 s for new observations. The round deadline
-is 10 s per point, measured from the time the board accepts the round.
+Both `start` and `round` use the same listening limits. The round deadline is
+the per-mode budget times the number of points, measured from the time the board
+accepts the round: 10 s per point in Beacon mode, 60 s in EAPOL mode. In Beacon
+mode a visit starts with up to 5 s and can extend to 7 s for new observations;
+those windows are Beacon only. An EAPOL point listens up to its share minus a
+3 s save reserve.
 See the [ESP32 guide](../firmware/esp32/README.md#run-a-round-over-uart)
-for the rule that decides when an observation is new.
+for the rule that decides when a Beacon observation is new.
 
-The board can save a beacon after the deadline if it accepted the beacon
-before the deadline. If the deadline prevents another visit from starting,
+The board can save a frame after the deadline if it accepted the frame before
+the deadline. If the deadline prevents another visit from starting,
 the board reports `stopped` and the unvisited points keep result digit `0`.
 A round that reaches every point can report `complete` after the final save.
 If setup for the first point reaches the deadline before listening starts,
@@ -269,24 +273,30 @@ session and request IDs from the `hello` reply to choose the next IDs.
 See the [UART checks](../tests/README.md#uart-protocol) for the bench steps
 and results.
 
-## Reserved: capture modes
+## Capture modes
 
-This section reserves fields for capture modes. No board or client
-implements them yet. A board without feature bit 5 runs every round as
-Beacon, and the commands above keep their formats. The
+The board and the client implement capture modes behind feature bit 5. A board
+without bit 5 runs every round as Beacon, and the commands above keep their
+formats. The
 [capture modes design](capture-modes-design.md#protocol-reservation) explains
 why the mode travels only in new commands.
 
-| Item | Reservation |
+| Item | Rule |
 | --- | --- |
-| Feature bit 5 (`20`) | The board supports capture modes. One bit covers every mode. |
-| `modes` | Read command, scope zero, no arguments. The OK reply appends `modes <count> <id>...`, two hex digits each. Beacon is `00`. |
-| `mode <id>` | Optional tail at the end of `round`, only with bit 5. Without it, and for `start`, the round is Beacon. A retry of the same session with another mode returns `conflict`. |
+| Feature bit 5 (`20`) | The board supports capture modes. A board advertises it exactly when it has a scan. One bit covers every mode. |
+| `modes` | Read command, scope zero, no arguments. The OK reply appends `modes 02 00 01`: Beacon `00` and EAPOL `01`, two hex digits each. |
+| `mode <id>` | Optional tail at the end of `round`, only with bit 5. Without it, and for `start`, the round is Beacon. An ID the board does not list returns `bad_request`. A board without bit 5 returns `bad_request` for a `mode` tail and a `modes` read. |
 | `round_status_mode` | Read command with bit 5, like `round_status_detail`. It inserts `mode <id>` after the optional `journal` and `interrupted` fields, just before `aps`. |
-| Result digit `5` | `absence_confirmed`. It appears only in `round_status_mode` replies. |
+| Result digit `5` | `absence_confirmed`. It appears only in `round_status_mode` replies. The EAPOL mode never returns it. |
+
+A retry of the same session with another mode, Beacon included, returns
+`conflict`.
 
 The existing round replies report a confirmed absence as `1`. Their overall
-result stays `saved` only when a point reports `2`. A client with bit 5
-reads the round with `round_status_mode`. In a non-Beacon round it takes the
-point results from that command only, because `round` and `round_stop`
-replies carry the older encoding.
+result stays `saved` only when a point reports `2`. A client with bit 5 reads
+the round with `round_status_mode` and takes the point results from that command
+only, because `round` and `round_stop` replies carry the older encoding.
+
+A rejected reply, any non-`ok` code, carries no round fields: it ends at the
+feature byte. The longest `round_status_mode` reply then fits the 240-byte
+reply buffer.

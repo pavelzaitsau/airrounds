@@ -21,12 +21,22 @@ enum class Code {
 };
 
 enum class State { idle, running, finalizing, complete, stopped, error };
-enum class Outcome { none = 0, not_observed = 1, saved = 2, radio_error = 3, storage_error = 4 };
+// absence_confirmed (digit 5) is a per-point result only round_status_mode carries; the board
+// never sends it in T11. See docs/t11.md, "Client reply parser".
+enum class Outcome {
+    none = 0,
+    not_observed = 1,
+    saved = 2,
+    radio_error = 3,
+    storage_error = 4,
+    absence_confirmed = 5
+};
 
 enum class JournalState { none, pending, saved, failed };
 enum class VisitInterruption { unknown, no, yes };
 constexpr uint8_t sessionJournalFeature = 0x04;
 constexpr uint8_t roundDetailFeature = 0x10;
+constexpr uint8_t captureModeFeature = 0x20; // Bit 5: the board lists capture modes and runs R5.
 constexpr size_t wireReplyCapacity = 240;
 
 inline const char* wireName(Code code) {
@@ -54,10 +64,10 @@ inline const char* wireName(State state) {
 }
 
 inline const char* wireName(Outcome outcome) {
-    static constexpr const char* names[]{"none", "not_observed", "saved", "radio_error",
-                                         "storage_error"};
+    static constexpr const char* names[]{"none",        "not_observed",     "saved",
+                                         "radio_error", "storage_error",    "absence_confirmed"};
     static_assert(sizeof(names) / sizeof(names[0]) ==
-                      static_cast<size_t>(Outcome::storage_error) + 1,
+                      static_cast<size_t>(Outcome::absence_confirmed) + 1,
                   "every outcome needs a wire name");
     return names[static_cast<size_t>(outcome)];
 }
@@ -93,6 +103,7 @@ struct RoundStatus {
     session::Profile profile;
     Outcome results[session::Profile::capacity]{};
     VisitInterruption interruption = VisitInterruption::unknown;
+    uint8_t mode = 0; // Capture-mode wire ID; Beacon is 0. See beaconModeId in passive_round.h.
 
     // The first unfinished slot is the active one while the board is busy.
     size_t next() const {
@@ -120,6 +131,11 @@ struct Reply {
     ScanReply scan{};
     bool hasFirmware = false;
     char firmware[16]{}; // Up to 15 characters of digits and dots, then a terminator.
+    bool hasMode = false;
+    uint8_t mode = 0; // The round's capture-mode wire ID, from a round_status_mode reply.
+    bool hasModes = false;
+    uint8_t modeCount = 0;
+    uint8_t modeIds[8]{}; // The board's listed capture-mode wire IDs, from a modes reply.
 };
 
 inline bool readFirmware(Fields& fields, Reply& reply) {
@@ -139,7 +155,11 @@ inline bool readFirmware(Fields& fields, Reply& reply) {
     return true;
 }
 
-inline bool readRound(Fields& fields, RoundStatus& round) {
+inline bool readRound(Fields& fields, RoundStatus& round, bool allowAbsence = false) {
+    // Only a round_status_mode reply (which carries the mode marker) may report result digit 5;
+    // every other reply keeps the digit-4 ceiling.
+    const uint64_t ceiling = static_cast<uint64_t>(allowAbsence ? Outcome::absence_confirmed
+                                                                : Outcome::storage_error);
     for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
          ++index) {
         const auto entry = fields.take();
@@ -153,7 +173,7 @@ inline bool readRound(Fields& fields, RoundStatus& round) {
         const Field channelField{entry.data + 12, 2};
         const Field resultField{entry.data + 14, 1};
         if (!bssid.hex(12, address) || !channelField.hex(2, channel) ||
-            !resultField.hex(1, result) || result > static_cast<uint64_t>(Outcome::storage_error)) {
+            !resultField.hex(1, result) || result > ceiling) {
             return false;
         }
         session::Target target{{}, static_cast<uint8_t>(channel)};
@@ -182,6 +202,31 @@ inline bool readScanReply(Fields& fields, ScanReply& scan) {
     return scan.index < scan.count && readScanEntry(fields, scan.entry);
 }
 
+// The modes list of a `modes` reply: a count, then that many two-hex wire IDs, with no field
+// after. A count above 8, a repeated ID, or a trailing field rejects the reply.
+inline bool readModes(Fields& fields, Reply& reply) {
+    uint64_t count = 0;
+    if ((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, count) || count > 8) {
+        return false;
+    }
+    reply.modeCount = static_cast<uint8_t>(count);
+    for (size_t index = 0; index < reply.modeCount; ++index) {
+        uint64_t id = 0;
+        if (!fields.take().hex(2, id)) {
+            return false;
+        }
+        const auto wireId = static_cast<uint8_t>(id);
+        for (size_t earlier = 0; earlier < index; ++earlier) {
+            if (reply.modeIds[earlier] == wireId) {
+                return false;
+            }
+        }
+        reply.modeIds[index] = wireId;
+    }
+    reply.hasModes = true;
+    return fields.atEnd();
+}
+
 inline bool readReplyDetails(Fields& fields, Reply& reply) {
     if (fields.atEnd()) {
         return true;
@@ -193,6 +238,9 @@ inline bool readReplyDetails(Fields& fields, Reply& reply) {
     if (marker.is("scan")) {
         reply.hasScan = true;
         return (reply.features & scanFeature) != 0 && readScanReply(fields, reply.scan);
+    }
+    if (marker.is("modes")) {
+        return readModes(fields, reply);
     }
     if (marker.is("journal")) {
         if ((reply.features & sessionJournalFeature) == 0 ||
@@ -212,9 +260,19 @@ inline bool readReplyDetails(Fields& fields, Reply& reply) {
             interrupted == 1 ? VisitInterruption::yes : VisitInterruption::no;
         marker = fields.take();
     }
+    if (marker.is("mode")) {
+        // round_status_mode inserts mode <id> just before aps, under feature bit 5.
+        uint64_t modeId = 0;
+        if ((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, modeId)) {
+            return false;
+        }
+        reply.mode = static_cast<uint8_t>(modeId);
+        reply.hasMode = true;
+        marker = fields.take();
+    }
     reply.hasRound = marker.is("aps");
     return reply.hasRound && (reply.features & passiveRoundFeature) != 0 &&
-           readRound(fields, reply.round) &&
+           readRound(fields, reply.round, reply.hasMode) &&
            ((reply.features & scanFeature) != 0 ||
             reply.round.profile.size() <= session::Profile::legacyCapacity);
 }

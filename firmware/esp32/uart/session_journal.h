@@ -22,12 +22,24 @@ struct JournalBuild {
 struct VisitStatistics {
     uint64_t listenStartedUs;
     uint64_t listenEndedUs;
-    uint32_t managementFrames;
-    uint32_t acceptedBeacons;
+    uint32_t observedFrames; // Frames of the mode's declared type the radio delivered this point.
+    uint32_t acceptedFrames; // Frames the mode accepted; always at most observedFrames.
     uint32_t queueOverflows;
     uint64_t bytesWritten;
     size_t verifiedFileSize;
 };
+
+// The capture-mode name for the journal mode= field, by the wire ID in RoundStatus.
+inline const char* journalModeName(uint8_t modeId) {
+    switch (modeId) {
+    case beaconModeId:
+        return "beacon";
+    case eapolModeId:
+        return "eapol";
+    default:
+        return "unknown";
+    }
+}
 
 inline bool sessionJournalPath(char* path, size_t size, const char* directory, const VisitId& id) {
     const int count = snprintf(path, size, "%s/session-%016" PRIx64 "-%08" PRIx32 ".log", directory,
@@ -42,13 +54,14 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
     const auto count = report.status.profile.size();
     const int header = snprintf(
         text, capacity,
-        "format=airrounds-session-v2\n"
-        "firmware=%s build=%s revision=%s protocol=%02x radio=passive\n"
+        "format=airrounds-session-v3\n"
+        "firmware=%s build=%s revision=%s protocol=%02x radio=passive mode=%s\n"
         "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
         "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
-        firmwareVersion, build.id, build.revision, static_cast<unsigned>(version), report.id.boot,
-        report.id.session, wireName(report.state), wireName(report.outcome), count,
-        report.budget.startedUs, report.endedUs, report.budget.durationUs);
+        firmwareVersion, build.id, build.revision, static_cast<unsigned>(version),
+        journalModeName(report.status.mode), report.id.boot, report.id.session,
+        wireName(report.state), wireName(report.outcome), count, report.budget.startedUs,
+        report.endedUs, report.budget.durationUs);
     if (header <= 0 || static_cast<size_t>(header) >= capacity) {
         return 0;
     }
@@ -69,12 +82,12 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
         const int line = snprintf(
             text + used, capacity - used,
             "point=%zu bssid=%012" PRIx64 " channel=%u outcome=%s"
-            " listen_started_us=%" PRIu64 " listen_ended_us=%" PRIu64 " management_frames=%" PRIu32
-            " accepted_beacons=%" PRIu32 " filtered_frames=%" PRIu32 " queue_overflows=%" PRIu32
+            " listen_started_us=%" PRIu64 " listen_ended_us=%" PRIu64 " observed_frames=%" PRIu32
+            " accepted_frames=%" PRIu32 " filtered_frames=%" PRIu32 " queue_overflows=%" PRIu32
             " bytes_written=%" PRIu64 " verified_file_size=%zu pcap=%s\n",
             index + 1, session::addressValue(target), static_cast<unsigned>(target.channel),
-            wireName(result), point.listenStartedUs, point.listenEndedUs, point.managementFrames,
-            point.acceptedBeacons, point.managementFrames - point.acceptedBeacons,
+            wireName(result), point.listenStartedUs, point.listenEndedUs, point.observedFrames,
+            point.acceptedFrames, point.observedFrames - point.acceptedFrames,
             point.queueOverflows, point.bytesWritten, point.verifiedFileSize, filename);
         if (line <= 0 || static_cast<size_t>(line) >= capacity - used) {
             return 0;

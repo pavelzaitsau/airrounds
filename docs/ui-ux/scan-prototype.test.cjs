@@ -88,11 +88,11 @@ function captureFirst(f) {
     assert.deepEqual(f.state().saved, [0]);
 }
 
-function selectTodoA(f) {
+function selectEapol(f) {
     openCaptureMode(f);
     f.press("down", "ok");
     assert.equal(f.screen().view, "home");
-    assert.equal(f.state().mode, "todoA");
+    assert.equal(f.state().mode, "eapol");
 }
 
 test("main menu lists five items in order and scrolls to About", () => {
@@ -126,7 +126,7 @@ test("OK on Capture mode opens the screen with the marker and focus on Beacon", 
     openCaptureMode(f);
     const page = f.screen();
     assert.equal(page.title, "Capture mode");
-    assert.deepEqual(page.rows.map((row) => row.label), ["Beacon", "Todo A", "Todo B"]);
+    assert.deepEqual(page.rows.map((row) => row.label), ["Beacon", "EAPOL", "Todo B"]);
     assert.equal(currentMode(f), "beacon");
     assert.equal(focusedMode(f), "beacon");
     assert.deepEqual(page.rows.map((row) => row.right), [undefined, "Soon", "Soon"]);
@@ -143,7 +143,7 @@ test("OK on Beacon returns to the menu with focus on Capture mode", () => {
     assert.equal(f.state().mode, "beacon");
 });
 
-test("OK on Todo A keeps Beacon and shows Not available yet until the next key", () => {
+test("OK on EAPOL keeps Beacon and shows Not available yet until the next key", () => {
     const f = fixture();
     openCaptureMode(f);
     f.press("down", "ok");
@@ -156,7 +156,7 @@ test("OK on Todo A keeps Beacon and shows Not available yet until the next key",
 });
 
 test("Back returns to the menu and changes nothing", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
+    const f = fixture({ implemented: ["beacon", "eapol"] });
     openCaptureMode(f);
     f.press("down", "back");
     const page = f.screen();
@@ -166,7 +166,7 @@ test("Back returns to the menu and changes nothing", () => {
 });
 
 test("Session active locks the choice during a round", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"], board: { session: "running" } });
+    const f = fixture({ implemented: ["beacon", "eapol"], board: { session: "running" } });
     assert.equal(f.screen().items[0], "Session status");
     f.press("ok");
     assert.equal(f.screen().view, "home", "Session status has no round to show in the mockup");
@@ -180,7 +180,7 @@ test("Session active locks the choice during a round", () => {
 
 test("Scan active locks the choice during a scan or a pending scan request", () => {
     for (const scan of ["running", "pending"]) {
-        const f = fixture({ implemented: ["beacon", "todoA"], board: { scan } });
+        const f = fixture({ implemented: ["beacon", "eapol"], board: { scan } });
         openCaptureMode(f);
         assert.equal(f.screen().hint, "Scan active");
         f.press("down", "ok");
@@ -190,7 +190,7 @@ test("Scan active locks the choice during a scan or a pending scan request", () 
 
 test("Board state unknown wins over the last known session state", () => {
     for (const link of ["lost", "offline", "checking", "update"]) {
-        const f = fixture({ implemented: ["beacon", "todoA"], board: { link, session: "running" } });
+        const f = fixture({ implemented: ["beacon", "eapol"], board: { link, session: "running" } });
         openCaptureMode(f);
         assert.equal(f.screen().hint, "Board state unknown", link);
         f.press("down", "ok");
@@ -202,11 +202,11 @@ test("Board state unknown wins over the last known session state", () => {
 });
 
 test("a restarted board is confirmed and idle", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"], board: { link: "restarted", modes: ["beacon", "todoA"] } });
+    const f = fixture({ implemented: ["beacon", "eapol"], board: { link: "restarted", modes: ["beacon", "eapol"] } });
     openCaptureMode(f);
     assert.equal(f.screen().hint, null);
     f.press("down", "ok");
-    assert.equal(f.state().mode, "todoA");
+    assert.equal(f.state().mode, "eapol");
 });
 
 test("a lock hint stays while Up and Down move the focus", () => {
@@ -214,12 +214,12 @@ test("a lock hint stays while Up and Down move the focus", () => {
     openCaptureMode(f);
     f.press("down");
     assert.equal(f.screen().hint, "Session active");
-    assert.equal(focusedMode(f), "todoA");
+    assert.equal(focusedMode(f), "eapol");
     f.press("down");
     assert.equal(focusedMode(f), "todoB");
     f.press("up");
     assert.equal(f.screen().hint, "Session active");
-    assert.equal(focusedMode(f), "todoA");
+    assert.equal(focusedMode(f), "eapol");
 });
 
 test("the lock hint wins over Not available yet", () => {
@@ -234,46 +234,46 @@ test("the lock hint wins over Not available yet", () => {
 });
 
 test("an implemented and listed mode can be selected", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
+    const f = fixture({ implemented: ["beacon", "eapol"] });
     openCaptureMode(f);
     assert.deepEqual(f.screen().rows.map((row) => row.available), [true, true, false]);
     f.press("down", "ok");
     const page = f.screen();
     assert.equal(page.view, "home");
     assert.equal(page.items[page.focus], "Capture mode");
-    assert.equal(f.state().mode, "todoA");
+    assert.equal(f.state().mode, "eapol");
 });
 
 test("no other mode is available until the modes reply arrives", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"], board: { modes: undefined } });
+    const f = fixture({ implemented: ["beacon", "eapol"], board: { modes: undefined } });
     assert.deepEqual(f.state().available, ["beacon"]);
     f.app.modesReply(null);
     assert.deepEqual(f.state().available, ["beacon"]);
-    f.app.modesReply(["beacon", "todoA"]);
-    assert.deepEqual(f.state().available, ["beacon", "todoA"]);
+    f.app.modesReply(["beacon", "eapol"]);
+    assert.deepEqual(f.state().available, ["beacon", "eapol"]);
 });
 
 test("the marker stays on the current mode wherever the focus is", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(f);
+    const f = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(f);
     f.press("ok");
-    assert.equal(focusedMode(f), "todoA");
+    assert.equal(focusedMode(f), "eapol");
     for (const key of ["up", "down", "down"]) {
         f.press(key);
-        assert.equal(currentMode(f), "todoA");
+        assert.equal(currentMode(f), "eapol");
         assert.equal(f.screen().rows.filter((row) => row.current).length, 1);
     }
     assert.equal(focusedMode(f), "todoB");
 });
 
 test("a modes reply without the selected mode returns to Beacon and clears results", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(f);
+    const f = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(f);
     f.press("up");
     openList(f);
     captureFirst(f);
-    f.app.modesReply(["beacon", "todoA"]);
-    assert.equal(f.state().mode, "todoA");
+    f.app.modesReply(["beacon", "eapol"]);
+    assert.equal(f.state().mode, "eapol");
     assert.deepEqual(f.state().saved, [0]);
     f.app.modesReply(["beacon"]);
     assert.equal(f.state().mode, "beacon");
@@ -282,8 +282,8 @@ test("a modes reply without the selected mode returns to Beacon and clears resul
 });
 
 test("losing the capture-mode capability returns to Beacon and clears results", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(f);
+    const f = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(f);
     f.press("up");
     openList(f);
     captureFirst(f);
@@ -291,13 +291,13 @@ test("losing the capture-mode capability returns to Beacon and clears results", 
     assert.equal(f.state().mode, "beacon");
     assert.deepEqual(f.state().saved, []);
     assert.deepEqual(f.state().available, ["beacon"]);
-    f.app.modesReply(["beacon", "todoA"]);
+    f.app.modesReply(["beacon", "eapol"]);
     assert.equal(f.state().board.modes, undefined);
 });
 
 test("a reconnect without a modes reply keeps the choice and shows Mode pending", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(f);
+    const f = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(f);
     f.press("up");
     openList(f);
     f.press("ok");
@@ -305,23 +305,23 @@ test("a reconnect without a modes reply keeps the choice and shows Mode pending"
     assert.equal(f.screen().heading, "1/5 selected");
     f.app.setBoard({ link: "lost" });
     f.app.setBoard({ link: "ready" });
-    assert.equal(f.state().mode, "todoA");
+    assert.equal(f.state().mode, "eapol");
     let page = f.screen();
     assert.equal(page.heading, "Mode pending");
     assert.equal(page.start, false);
     assert.equal(page.rows[0].selected, true);
     f.press("right");
     assert.equal(f.screen().view, "list");
-    f.app.modesReply(["beacon", "todoA"]);
+    f.app.modesReply(["beacon", "eapol"]);
     page = f.screen();
     assert.equal(page.heading, "1/5 selected");
     assert.equal(page.start, true);
-    assert.equal(f.state().mode, "todoA");
+    assert.equal(f.state().mode, "eapol");
 });
 
 test("the list heading shows Maximum 5, then Board offline, then Mode pending", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(f);
+    const f = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(f);
     f.press("up");
     openList(f);
     f.app.setBoard({ link: "lost" });
@@ -338,20 +338,20 @@ test("the list heading shows Maximum 5, then Board offline, then Mode pending", 
     f.app.setBoard({ link: "ready" });
     assert.equal(f.screen().heading, "Mode pending");
     assert.equal(f.screen().start, false);
-    f.app.modesReply(["beacon", "todoA"]);
+    f.app.modesReply(["beacon", "eapol"]);
     assert.equal(f.screen().heading, "5/5 selected");
     assert.equal(f.screen().start, true);
 });
 
 test("a mode change clears the results but keeps the list and the selection", () => {
-    const f = fixture({ implemented: ["beacon", "todoA"] });
+    const f = fixture({ implemented: ["beacon", "eapol"] });
     openList(f);
     captureFirst(f);
     f.press("down", "ok");
     assert.deepEqual(f.state().selected, [1]);
     const networks = f.state().networks;
     f.press("back");
-    selectTodoA(f);
+    selectEapol(f);
     assert.deepEqual(f.state().saved, []);
     assert.deepEqual(f.state().missed, []);
     assert.deepEqual(f.state().selected, [1]);
@@ -372,9 +372,9 @@ test("selecting the current mode again keeps the results", () => {
 });
 
 test("a new instance starts on Beacon", () => {
-    const first = fixture({ implemented: ["beacon", "todoA"] });
-    selectTodoA(first);
-    const reloaded = fixture({ implemented: ["beacon", "todoA"] });
+    const first = fixture({ implemented: ["beacon", "eapol"] });
+    selectEapol(first);
+    const reloaded = fixture({ implemented: ["beacon", "eapol"] });
     assert.equal(reloaded.state().mode, "beacon");
     openCaptureMode(reloaded);
     assert.equal(currentMode(reloaded), "beacon");

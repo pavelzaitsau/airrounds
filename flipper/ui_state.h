@@ -65,10 +65,24 @@ inline uart::Outcome pointOutcome(const RunReport& report, size_t point) {
     return report.round.profile.size() == 0 ? report.outcome : report.round.results[point];
 }
 
-inline unsigned savedPoints(const RunReport& report) {
+// Whether a point counts as a success by the mode's meaning: a frame-found mode on a saved frame,
+// an absence mode on a confirmed absence (digit 5), an unknown mode on either.
+inline bool pointSucceeded(uart::Outcome outcome, const CaptureModeInfo& mode) {
+    switch (mode.meaning) {
+    case SuccessMeaning::absence_confirmed:
+        return outcome == uart::Outcome::absence_confirmed;
+    case SuccessMeaning::packet_found:
+        return outcome == uart::Outcome::saved;
+    case SuccessMeaning::any_result:
+        return outcome == uart::Outcome::saved || outcome == uart::Outcome::absence_confirmed;
+    }
+    return false;
+}
+
+inline unsigned savedPoints(const RunReport& report, const CaptureModeInfo& mode = beaconMode()) {
     unsigned saved = 0;
     for (size_t index = 0; index < reportSize(report); ++index) {
-        if (pointOutcome(report, index) == uart::Outcome::saved) {
+        if (pointSucceeded(pointOutcome(report, index), mode)) {
             ++saved;
         }
     }
@@ -88,6 +102,8 @@ inline const char* pointResult(uart::Outcome outcome, uart::State state,
     case uart::Outcome::saved:
         return mode.meaning == SuccessMeaning::absence_confirmed ? mode.resultMiss
                                                                  : mode.resultSuccess;
+    case uart::Outcome::absence_confirmed:
+        return mode.meaning == SuccessMeaning::packet_found ? mode.resultMiss : mode.resultSuccess;
     case uart::Outcome::not_observed:
         return mode.resultMiss;
     case uart::Outcome::radio_error:
@@ -109,6 +125,8 @@ inline const char* networkRowStatus(uart::Outcome outcome,
         return "";
     case uart::Outcome::saved:
         return absence ? mode.rowMiss : mode.rowSuccess;
+    case uart::Outcome::absence_confirmed:
+        return mode.meaning == SuccessMeaning::packet_found ? mode.rowMiss : mode.rowSuccess;
     case uart::Outcome::not_observed:
         return mode.rowMiss;
     default:
@@ -122,6 +140,8 @@ inline const char* pointDetail(uart::Outcome outcome, uart::State state,
     case uart::Outcome::saved:
         return mode.meaning == SuccessMeaning::absence_confirmed ? mode.detailMiss
                                                                  : mode.detailSuccess;
+    case uart::Outcome::absence_confirmed:
+        return mode.meaning == SuccessMeaning::packet_found ? mode.detailMiss : mode.detailSuccess;
     case uart::Outcome::not_observed:
         return mode.detailMiss;
     case uart::Outcome::storage_error:

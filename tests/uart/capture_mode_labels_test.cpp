@@ -41,7 +41,8 @@ void testModeLookup() {
     using airrounds::flipper::modeOf;
     assert(&modeOf(0x00) == &airrounds::flipper::beaconMode());
     assert(same(modeOf(0x00).listTitle, "Beacons"));
-    assert(same(modeOf(0x01).name, "Todo A") && same(modeOf(0x02).name, "Todo B"));
+    assert(same(modeOf(0x01).name, "EAPOL") && same(modeOf(0x01).listTitle, "Handshakes"));
+    assert(same(modeOf(0x02).name, "Todo B"));
     // A mode the app does not know gets the neutral labels.
     const auto& unknown = modeOf(0x42);
     assert(&unknown == &airrounds::flipper::neutralMode);
@@ -60,8 +61,13 @@ void testAvailability() {
     listed.count = 2;
     listed.ids[0] = 0x00;
     listed.ids[1] = 0x01;
-    // A listed mode stays unavailable until the app implements it.
-    assert(!modeAvailable(captureModes[1], listed));
+    // EAPOL is implemented and offered only when the board lists 01.
+    assert(modeAvailable(captureModes[1], listed));
+    // Todo B stays unavailable until the app implements it, even when the board lists it.
+    BoardModes listsTodoB;
+    listsTodoB.count = 1;
+    listsTodoB.ids[0] = 0x02;
+    assert(!modeAvailable(captureModes[2], listsTodoB));
     BoardModes absenceListed;
     absenceListed.count = 1;
     absenceListed.ids[0] = 0x05;
@@ -144,6 +150,58 @@ void testClearOutcomes() {
     assert(networks.selected(networks.find(second)));
 }
 
+// Result digit 5 (absence_confirmed): a Miss for a frame-found mode (Beacon, EAPOL), a Success for
+// an absence mode and an unknown mode. The success counter follows the same mapping.
+void testDigitFive() {
+    using airrounds::flipper::networkRowStatus;
+    using airrounds::flipper::pointDetail;
+    using airrounds::flipper::pointResult;
+    using airrounds::flipper::RunReport;
+    using airrounds::flipper::savedPoints;
+    const auto& beacon = airrounds::flipper::beaconMode();
+    const auto& eapol = airrounds::flipper::captureModes[1];
+    const auto& neutral = airrounds::flipper::neutralMode;
+    assert(same(eapol.name, "EAPOL"));
+
+    // EAPOL success labels in every slot.
+    assert(same(pointResult(Outcome::saved, State::complete, eapol), "Captured"));
+    assert(same(pointResult(Outcome::not_observed, State::complete, eapol), "Not seen"));
+    assert(same(pointDetail(Outcome::saved, State::complete, eapol), "Handshake to board SD"));
+    assert(same(networkRowStatus(Outcome::saved, eapol), "Saved"));
+    assert(same(networkRowStatus(Outcome::not_observed, eapol), "Not seen"));
+    assert(same(eapol.listTitle, "Handshakes") && same(eapol.counter, "Captured %u/%u"));
+
+    assert(same(pointResult(Outcome::absence_confirmed, State::complete, beacon), "Not seen"));
+    assert(same(pointResult(Outcome::absence_confirmed, State::complete, eapol), "Not seen"));
+    assert(same(pointResult(Outcome::absence_confirmed, State::complete, absenceMode), "Absent"));
+    assert(same(pointResult(Outcome::absence_confirmed, State::complete, neutral), "Done"));
+
+    assert(same(networkRowStatus(Outcome::absence_confirmed, beacon), "Not seen"));
+    assert(same(networkRowStatus(Outcome::absence_confirmed, absenceMode), "Absent"));
+    assert(same(networkRowStatus(Outcome::absence_confirmed, neutral), "Done"));
+
+    assert(same(pointDetail(Outcome::absence_confirmed, State::complete, eapol), "No handshake"));
+    assert(same(pointDetail(Outcome::absence_confirmed, State::complete, absenceMode),
+               "Absence confirmed"));
+
+    // The counter counts a point as a success by the mode's meaning.
+    RunReport report;
+    report.state = State::complete;
+    const airrounds::session::Target targets[3] = {
+        {{2, 0, 0, 0, 0, 1}, 6}, {{2, 0, 0, 0, 0, 2}, 6}, {{2, 0, 0, 0, 0, 3}, 6}};
+    for (const auto& target : targets) {
+        const bool added = report.round.profile.add(target);
+        assert(added);
+    }
+    report.round.results[0] = Outcome::saved;
+    report.round.results[1] = Outcome::not_observed;
+    report.round.results[2] = Outcome::absence_confirmed;
+    assert(savedPoints(report, beacon) == 1);      // only saved
+    assert(savedPoints(report, eapol) == 1);       // only saved
+    assert(savedPoints(report, absenceMode) == 1); // only digit 5
+    assert(savedPoints(report, neutral) == 2);     // saved and digit 5
+}
+
 // Each row of the lock table in docs/ui-ux/capture-modes.md, in its order of priority.
 void testModeLocks() {
     using airrounds::flipper::captureModeLock;
@@ -213,6 +271,7 @@ int main() {
     testLabelSlots();
     testListRows();
     testClearOutcomes();
+    testDigitFive();
     testModeLocks();
     std::cout << "Capture mode labels: lookup, availability, label slots, list rows, result reset, "
                  "and locks passed\n";

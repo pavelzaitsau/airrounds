@@ -49,10 +49,10 @@ void expectContains(const std::string& actual, const std::string& part, int line
 
 // A rejected or plain reply ends after the feature bits, with no scan or round fields.
 void expectPlain(const std::string& actual, const char* code, int line) {
-    const std::string suffix = " 1b\n";
+    const std::string suffix = " 3b\n";
     if (actual.find(std::string(" ") + code + " ") != 46 || actual.size() < suffix.size() ||
         actual.compare(actual.size() - suffix.size(), suffix.size(), suffix) != 0) {
-        fail(line, "plain reply", std::string("... ") + code + " ... 1b\\n", actual);
+        fail(line, "plain reply", std::string("... ") + code + " ... 3b\\n", actual);
     }
 }
 
@@ -423,7 +423,7 @@ void roundDetailsDistinguishAnInterruption() {
     wire.protocol.poll();
     EXPECT_REPLY(wire.command("8000000000000006 00000003 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000006 00000003 ok 00000003 stopped not_observed "
-                 "0000000000000006 1b interrupted 0 aps 020000000001011 020000000002060\n");
+                 "0000000000000006 3b interrupted 0 aps 020000000001011 020000000002060\n");
 }
 
 void aSavedRoundDoesNotCarryOver() {
@@ -450,10 +450,10 @@ void stopAfterTheDeadlineIsNotAnInterruption() {
     wire.visit.result = Outcome::not_observed;
     EXPECT_REPLY(wire.command("0000000000000002 00000001 round_stop"),
                  "!01 123456789abcdef0 0000000000000002 00000001 ok 00000001 stopped not_observed "
-                 "0000000000000002 1b aps 020000000001011\n");
+                 "0000000000000002 3b aps 020000000001011\n");
     EXPECT_REPLY(wire.command("8000000000000003 00000001 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000003 00000001 ok 00000001 stopped not_observed "
-                 "0000000000000002 1b interrupted 0 aps 020000000001011\n");
+                 "0000000000000002 3b interrupted 0 aps 020000000001011\n");
     assert(wire.visit.starts == 1);
     assert(wire.visit.stops == 1);
     assert(wire.visit.saves == 1);
@@ -474,10 +474,10 @@ void stopWithASavedPointIsNotAnInterruption() {
     wire.visit.result = Outcome::saved;
     EXPECT_REPLY(wire.command("0000000000000002 00000001 round_stop"),
                  "!01 123456789abcdef0 0000000000000002 00000001 ok 00000001 stopped saved "
-                 "0000000000000002 1b aps 020000000001012 020000000002062 0200000000030b0\n");
+                 "0000000000000002 3b aps 020000000001012 020000000002062 0200000000030b0\n");
     EXPECT_REPLY(wire.command("8000000000000003 00000001 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000003 00000001 ok 00000001 stopped saved "
-                 "0000000000000002 1b interrupted 0 aps 020000000001012 020000000002062 "
+                 "0000000000000002 3b interrupted 0 aps 020000000001012 020000000002062 "
                  "0200000000030b0\n");
     wire.protocol.poll();
     assert(wire.visit.starts == 2);
@@ -501,18 +501,18 @@ void stopDuringPreparationIsAnInterruption() {
     wire.visit.holdCheckpoint = true;
     EXPECT_REPLY(wire.command("0000000000000003 00000002 round 020000000002 06 020000000003 0b"),
                  "!01 123456789abcdef0 0000000000000003 00000002 ok 00000002 running none "
-                 "0000000000000003 1b aps 020000000002060 0200000000030b0\n");
+                 "0000000000000003 3b aps 020000000002060 0200000000030b0\n");
     assert(wire.visit.starts == 1);
     EXPECT_REPLY(wire.command("0000000000000004 00000002 round_stop"),
                  "!01 123456789abcdef0 0000000000000004 00000002 ok 00000002 running none "
-                 "0000000000000004 1b aps 020000000002060 0200000000030b0\n");
+                 "0000000000000004 3b aps 020000000002060 0200000000030b0\n");
     wire.protocol.poll();
     assert(wire.visit.starts == 1);
     wire.visit.checkpointPending = false;
     wire.protocol.poll();
     EXPECT_REPLY(wire.command("8000000000000005 00000002 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000005 00000002 ok 00000002 stopped not_observed "
-                 "0000000000000004 1b interrupted 1 aps 020000000002061 0200000000030b0\n");
+                 "0000000000000004 3b interrupted 1 aps 020000000002061 0200000000030b0\n");
     assert(wire.visit.starts == 1);
     assert(wire.visit.stops == 1);
     assert(wire.visit.saves == 1);
@@ -803,7 +803,7 @@ void readsCheckScopeAndArguments() {
         "!01 123456789abcdef0 0000000000000001 00000000 unknown_session 00000000 idle none "
         "0000000000000001 07\n");
     EXPECT_CONTAINS(wire.command("0000000000000002 00000000 round_stop"),
-                    " unknown_session 00000000 idle none 0000000000000002 07 aps\n");
+                    " unknown_session 00000000 idle none 0000000000000002 07\n");
     EXPECT_REPLY(wire.command("8000000000000002 00000000 round_status_log"),
                  "!01 123456789abcdef0 8000000000000002 00000000 ok 00000000 idle none "
                  "0000000000000002 07 journal none aps\n");
@@ -825,10 +825,12 @@ void readsCheckScopeAndArguments() {
             expected += ' ';
             expected += code;
             expected += running;
-            if (std::string(verb) == "round_status_log") {
+            // A rejected reply (an unknown session) carries no journal or round fields.
+            const bool ok = code == "ok";
+            if (ok && std::string(verb) == "round_status_log") {
                 expected += " journal pending";
             }
-            if (std::string(verb) != "status") {
+            if (ok && std::string(verb) != "status") {
                 expected += " aps 020000000001060 0200000000020b0";
             }
             EXPECT_REPLY(reply, expected + "\n");
@@ -855,7 +857,7 @@ void detailWithJournal() {
     wire.visit.journalStatus = JournalState::saved;
     EXPECT_REPLY(wire.command("8000000000000001 00000000 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000001 00000000 ok 00000000 idle none "
-                 "0000000000000000 1f journal saved interrupted 0 aps\n");
+                 "0000000000000000 3f journal saved interrupted 0 aps\n");
     EXPECT_CONTAINS(wire.command("8000000000000002 00000000 round_status_detail 00"),
                     " bad_request ");
 }
@@ -873,10 +875,10 @@ void scanRequestsCheckTheirFields() {
     assert(scan.starts == 0);
     EXPECT_REPLY(wire.command("0000000000000004 00000000 scan"),
                  "!01 123456789abcdef0 0000000000000004 00000000 ok 00000000 idle none "
-                 "0000000000000004 1b\n");
+                 "0000000000000004 3b\n");
     assert(scan.starts == 1);
     const char* waiting = "!01 123456789abcdef0 8000000000000002 00000000 ok 00000000 idle none "
-                          "0000000000000004 1b scan running 00 00\n";
+                          "0000000000000004 3b scan running 00 00\n";
     EXPECT_REPLY(wire.command("8000000000000002 00000000 scan_read 0000000000000004 00"), waiting);
     // While the scan runs there are no rows, so only index zero is valid.
     EXPECT_PLAIN(wire.command("8000000000000003 00000000 scan_read 0000000000000004 01"),
@@ -901,7 +903,7 @@ void scanRequestsCheckTheirFields() {
     assert(scan.state == ScanState::running);
     EXPECT_REPLY(wire.command("0000000000000008 00000000 scan"),
                  "!01 123456789abcdef0 0000000000000008 00000000 busy 00000000 idle none "
-                 "0000000000000008 1b\n");
+                 "0000000000000008 3b\n");
     assert(scan.starts == 1);
 }
 
@@ -912,7 +914,7 @@ void scanReadReturnsRows() {
     // A complete scan with no rows also reports count zero.
     scan.state = ScanState::complete;
     EXPECT_CONTAINS(wire.command("8000000000000004 00000000 scan_read 0000000000000004 00"),
-                    " ok 00000000 idle none 0000000000000004 1b scan complete 00 00\n");
+                    " ok 00000000 idle none 0000000000000004 3b scan complete 00 00\n");
     Target hidden{{}, 11};
     airrounds::session::setAddress(hidden, 0x0200000000a1);
     Target named{{}, 1};
@@ -922,10 +924,10 @@ void scanReadReturnsRows() {
     assert(added);
     EXPECT_REPLY(wire.command("8000000000000005 00000000 scan_read 0000000000000004 00"),
                  "!01 123456789abcdef0 8000000000000005 00000000 ok 00000000 idle none "
-                 "0000000000000004 1b scan complete 02 00 0200000000a1 0b -\n");
+                 "0000000000000004 3b scan complete 02 00 0200000000a1 0b -\n");
     EXPECT_REPLY(wire.command("8000000000000006 00000000 scan_read 0000000000000004 01"),
                  "!01 123456789abcdef0 8000000000000006 00000000 ok 00000000 idle none "
-                 "0000000000000004 1b scan complete 02 01 0200000000b2 01 41ff\n");
+                 "0000000000000004 3b scan complete 02 01 0200000000b2 01 41ff\n");
     EXPECT_PLAIN(wire.command("8000000000000007 00000000 scan_read 0000000000000004 02"),
                  "bad_request");
     // A finished scan has nothing to stop.
@@ -960,7 +962,7 @@ void scanAndRoundShareTheReceiver() {
     // Rows from the previous scan stay hidden while the new scan runs.
     assert(scan.list.size() == 2);
     EXPECT_CONTAINS(wire.command("800000000000000a 00000000 scan_read 000000000000000d 00"),
-                    " ok 00000001 complete not_observed 000000000000000d 1b scan running 00 00\n");
+                    " ok 00000001 complete not_observed 000000000000000d 3b scan running 00 00\n");
     EXPECT_PLAIN(wire.command("800000000000000a 00000000 scan_read 000000000000000d 01"),
                  "bad_request");
     // scan_read is a read, so a mutation ID cannot carry it.
@@ -977,7 +979,7 @@ void scanReportsAnError() {
     EXPECT_CONTAINS(wire.command("000000000000000d 00000000 scan"), " ok ");
     scan.state = ScanState::error;
     EXPECT_CONTAINS(wire.command("800000000000000b 00000000 scan_read 000000000000000d 00"),
-                    " 1b scan error 00 00\n");
+                    " 3b scan error 00 00\n");
 }
 
 void mutationsCheckTheirArguments() {
@@ -1026,12 +1028,12 @@ void stopDuringTheLastSaveCompletesTheRound() {
     // The last point ended on its own; a stop during its save skips nothing.
     EXPECT_REPLY(wire.command("0000000000000002 00000001 round_stop"),
                  "!01 123456789abcdef0 0000000000000002 00000001 ok 00000001 finalizing none "
-                 "0000000000000002 1b aps 020000000001012 020000000002060\n");
+                 "0000000000000002 3b aps 020000000001012 020000000002060\n");
     wire.visit.result = Outcome::not_observed;
     wire.protocol.poll();
     EXPECT_REPLY(wire.command("8000000000000003 00000001 round_status_detail"),
                  "!01 123456789abcdef0 8000000000000003 00000001 ok 00000001 complete saved "
-                 "0000000000000002 1b interrupted 0 aps 020000000001012 020000000002061\n");
+                 "0000000000000002 3b interrupted 0 aps 020000000001012 020000000002061\n");
     assert(wire.visit.stops == 2);
     assert(wire.visit.saves == 2);
 }
@@ -1301,10 +1303,125 @@ void clientRejectsReplyBootZero() {
     assert(!unterminatedRead);
 }
 
+// R5: the modes read, the mode tail on round, round_status_mode, and the retry conflict on a
+// changed mode. A board with a scan advertises feature bit 5 (3b/3f).
+void captureModeR5() {
+    {
+        TestScan scan;
+        Wire wire(boot, &scan);
+        // The modes list read, scope zero, no arguments.
+        EXPECT_REPLY(wire.command("8000000000000001 00000000 modes"),
+                     "!01 123456789abcdef0 8000000000000001 00000000 ok 00000000 idle none "
+                     "0000000000000000 3b modes 02 00 01\n");
+    }
+    {
+        // A board without a scan has no bit 5: the modes read and a mode tail are unknown fields.
+        Wire plain;
+        EXPECT_CONTAINS(plain.command("8000000000000001 00000000 modes"), " bad_request ");
+        EXPECT_CONTAINS(plain.command("0000000000000001 00000001 round 020000000001 06 mode 01"),
+                        " bad_request ");
+    }
+    {
+        // A round with mode 01 selects EAPOL; round_status_mode carries mode 01 before aps.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(wire.command("0000000000000001 00000001 round 020000000001 06 mode 01"),
+                        " ok 00000001 running none ");
+        EXPECT_REPLY(wire.command("8000000000000002 00000001 round_status_mode"),
+                     "!01 123456789abcdef0 8000000000000002 00000001 ok 00000001 running none "
+                     "0000000000000001 3b interrupted 0 mode 01 aps 020000000001060\n");
+    }
+    {
+        // Without a tail a round is Beacon; round_status_mode reports mode 00.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(wire.command("0000000000000001 00000001 round 020000000001 06"),
+                        " ok 00000001 running none ");
+        EXPECT_CONTAINS(wire.command("8000000000000002 00000001 round_status_mode"),
+                        " 3b interrupted 0 mode 00 aps 020000000001060\n");
+    }
+}
+
+// R5 continued: the five-point tail, an unknown mode, the retry conflict, the return to Beacon
+// after an EAPOL round, and the reply budget.
+void captureModeR5More() {
+    {
+        // A five-point round with a mode tail selects EAPOL for every point.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(
+            wire.command("0000000000000001 00000001 round 020000000001 01 020000000002 06 "
+                         "020000000003 0b 020000000004 01 020000000005 06 mode 01"),
+            " ok 00000001 running none ");
+        EXPECT_CONTAINS(wire.command("8000000000000002 00000001 round_status_mode"),
+                        " mode 01 aps 020000000001010 020000000002060 0200000000030b0 "
+                        "020000000004010 020000000005060\n");
+    }
+    {
+        // An unknown mode ID, and a mode tail on start, are rejected.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(wire.command("0000000000000001 00000001 round 020000000001 06 mode 02"),
+                        " bad_request ");
+        EXPECT_CONTAINS(wire.command("0000000000000002 00000001 start 020000000001 06 mode 01"),
+                        " bad_request ");
+        // A mode tail with no access point is bad grammar, not busy.
+        EXPECT_CONTAINS(wire.command("0000000000000003 00000001 round mode 01"), " bad_request ");
+    }
+    {
+        // A retry of the running session with another mode is a conflict; the same mode is ok.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(wire.command("0000000000000001 00000001 round 020000000001 06 mode 01"),
+                        " ok 00000001 running ");
+        EXPECT_CONTAINS(wire.command("0000000000000002 00000001 round 020000000001 06 mode 00"),
+                        " conflict ");
+        EXPECT_CONTAINS(wire.command("0000000000000003 00000001 round 020000000001 06"),
+                        " conflict ");
+        EXPECT_CONTAINS(wire.command("0000000000000004 00000001 round 020000000001 06 mode 01"),
+                        " ok ");
+    }
+    {
+        // A round after an EAPOL round returns to Beacon.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        EXPECT_CONTAINS(wire.command("0000000000000001 00000001 round 020000000001 06 mode 01"),
+                        " running ");
+        wire.visit.done = true;
+        wire.visit.result = Outcome::saved;
+        wire.protocol.poll();
+        EXPECT_CONTAINS(wire.command("0000000000000002 00000002 round 020000000002 06"),
+                        " running ");
+        EXPECT_CONTAINS(wire.command("8000000000000003 00000002 round_status_mode"),
+                        " mode 00 aps 020000000002060\n");
+    }
+    {
+        // The reply budget: the longest OK round_status_mode reply fits, and a rejected one carries
+        // no round fields.
+        TestScan scan;
+        Wire wire(boot, &scan);
+        wire.visit.journal = true;
+        wire.visit.journalStatus = JournalState::saved;
+        EXPECT_CONTAINS(
+            wire.command("0000000000000001 00000001 round 020000000001 01 020000000002 06 "
+                         "020000000003 0b 020000000004 01 020000000005 06 mode 01"),
+            " running ");
+        const auto full = wire.command("8000000000000002 00000001 round_status_mode");
+        assert(!full.empty() && full.size() < wireReplyCapacity);
+        assert(full.find(" 3f journal saved interrupted 0 mode 01 aps ") != std::string::npos);
+        // A rejected round_status_mode (another session) carries no journal, mode, or aps fields.
+        EXPECT_REPLY(wire.command("8000000000000003 00000002 round_status_mode"),
+                     "!01 123456789abcdef0 8000000000000003 00000002 unknown_session 00000001 "
+                     "running none 0000000000000001 3f\n");
+    }
+}
+
 } // namespace
 
 int main() try {
     alarm(30); // A loop that never ends fails the test instead of hanging it.
+    captureModeR5();
+    captureModeR5More();
     negotiationAndValidation();
     retriesAndSave();
     quietStopCompletesInReply();
@@ -1348,7 +1465,7 @@ int main() try {
     scanListNamesAHiddenRow();
     scanListAddRules();
     scanListReplacesTheFirstWeakestRow();
-    std::cout << "UART protocol: 43 groups passed\n";
+    std::cout << "UART protocol: 44 groups passed\n";
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return EXIT_FAILURE;

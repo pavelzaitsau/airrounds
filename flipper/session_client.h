@@ -7,7 +7,18 @@ namespace airrounds {
 namespace flipper {
 
 enum class Link { connecting, ready, lost, incompatible };
-enum class Request { none, hello, status, start, stop, scan, scan_read, scan_stop, firmware };
+enum class Request {
+    none,
+    hello,
+    status,
+    start,
+    stop,
+    scan,
+    scan_read,
+    scan_stop,
+    firmware,
+    modes
+};
 // The board firmware version: not asked for, being read, not reported by an older board, or known.
 enum class BoardFirmware { none, reading, unknown, known };
 
@@ -35,6 +46,19 @@ public:
 
     BoardFirmware boardFirmware() const { return firmwareState_; }
     const char* firmware() const { return firmware_; }
+
+    // Feature bit 5: the board lists capture modes and runs R5.
+    bool supportsCaptureModes() const { return supportsCaptureModes_; }
+    // True while a bit-5 board has not yet answered a modes read for this boot: the mode choice is
+    // not confirmed, so the app shows "Mode pending" for a non-Beacon choice.
+    bool modesPending() const { return supportsCaptureModes_ && modesPending_; }
+    uint8_t boardModeCount() const { return boardModeCount_; }
+    const uint8_t* boardModeIds() const { return boardModeIds_; }
+
+    // The capture-mode wire ID a round_status_mode reply reported for the current round, when one
+    // did. Until then reportedModeKnown() is false and the app uses the chosen mode's labels.
+    bool reportedModeKnown() const { return snapshot_.hasMode; }
+    uint8_t reportedMode() const { return snapshot_.mode; }
 
     // Reads the board firmware version once, before the next status read.
     void requestFirmware() {
@@ -89,11 +113,12 @@ public:
         return profile.add(target) && start(profile, now);
     }
 
-    bool start(const session::Profile& profile, uint32_t now) {
+    bool start(const session::Profile& profile, uint32_t now, uint8_t modeId = 0) {
         if (!canStart(profile.size())) {
             return false;
         }
         requestedProfile_ = profile;
+        requestedMode_ = modeId;
         request(Request::start, now, &requestedProfile_);
         return true;
     }
@@ -129,6 +154,11 @@ public:
                 firmwareState_ = BoardFirmware::unknown;
                 pending_ = Request::none;
                 wait_ = {now, 0};
+            } else if (pending_ == Request::modes) {
+                // A modes timeout keeps the link up and leaves the choice pending; the status poll
+                // runs next (modesTried_ stays set) and modes retries after it.
+                pending_ = Request::none;
+                wait_ = {now, 0};
             } else {
                 transportLost(now);
             }
@@ -144,6 +174,11 @@ public:
                 request(Request::scan_stop, now);
             } else if (scanState_ == uart::ScanState::running) {
                 request(Request::scan_read, now);
+            } else if (supportsCaptureModes_ && modesPending_ && !modesTried_) {
+                // One modes attempt per cycle, then the status poll clears modesTried_, so a board
+                // that keeps failing modes cannot starve the status poll.
+                modesTried_ = true;
+                request(Request::modes, now);
             } else {
                 request(Request::status, now);
             }
@@ -198,6 +233,7 @@ private:
             scanState_ = uart::ScanState::error;
         }
         cancelScanPending_ = false;
+        modesTried_ = false;
         link_ = reason;
         pending_ = Request::none;
         length_ = 0;
@@ -213,47 +249,58 @@ private:
         return output + width;
     }
 
-    void request(Request kind, uint32_t now, const session::Profile* profile = nullptr) {
-        pending_ = kind;
-        sentAt_ = now;
-        const bool mutation = mutationPending();
-        const auto id = mutation ? ++mutationHighWater_ : nextNonce();
-        if (mutation) {
-            rejected_ = Request::none;
+    // The status read verb by the board's features. With bit 5 every round status comes from
+    // round_status_mode, Beacon included.
+    const char* statusVerb() const {
+        if (supportsCaptureModes_) {
+            return "round_status_mode";
         }
-        const char* verb = "hello";
-        uint32_t scope = 0;
+        if (supportsRoundDetail_) {
+            return "round_status_detail";
+        }
+        if (supportsJournal_) {
+            return "round_status_log";
+        }
+        return supportsRounds_ ? "round_status" : "status";
+    }
+
+    // The verb for a request, with its scope, and the expects flags it sets for reply validation.
+    const char* verbFor(Request kind, uint64_t id, uint32_t& scope) {
         expectsRound_ = false;
         expectsJournal_ = false;
-        if (kind == Request::start) {
+        expectsMode_ = false;
+        scope = 0;
+        switch (kind) {
+        case Request::start:
             scope = snapshot_.session + 1U;
             expectsRound_ = supportsRounds_;
-            verb = expectsRound_ ? "round" : "start";
-        } else if (kind == Request::stop) {
+            return expectsRound_ ? "round" : "start";
+        case Request::stop:
             scope = snapshot_.session;
             expectsRound_ = supportsRounds_;
-            verb = expectsRound_ ? "round_stop" : "stop";
-        } else if (kind == Request::scan) {
+            return expectsRound_ ? "round_stop" : "stop";
+        case Request::scan:
             scanId_ = id;
-            verb = "scan";
-        } else if (kind == Request::scan_read) {
-            verb = "scan_read";
-        } else if (kind == Request::scan_stop) {
-            verb = "scan_stop";
-        } else if (kind == Request::firmware) {
-            verb = "firmware";
-        } else if (kind == Request::status) {
+            return "scan";
+        case Request::scan_read:
+            return "scan_read";
+        case Request::scan_stop:
+            return "scan_stop";
+        case Request::firmware:
+            return "firmware";
+        case Request::modes:
+            return "modes";
+        case Request::status:
             expectsRound_ = supportsRounds_;
             expectsJournal_ = supportsJournal_;
-            verb = expectsRound_ ? "round_status" : "status";
-            if (supportsRoundDetail_) {
-                verb = "round_status_detail";
-            } else if (expectsJournal_) {
-                verb = "round_status_log";
-            }
+            expectsMode_ = supportsCaptureModes_;
+            return statusVerb();
+        default:
+            return "hello";
         }
-        key_ = {boot_, id, scope};
+    }
 
+    void sendFrame(Request kind, const char* verb, const session::Profile* profile) {
         char frame[uart::frameCapacity + 1];
         char* out = frame;
         *out++ = '@';
@@ -283,8 +330,29 @@ private:
             *out++ = ' ';
             out = hex<2>(out, target.channel);
         }
+        // A non-Beacon round carries a mode <id> tail; Beacon (0) keeps the plain round line.
+        if (kind == Request::start && expectsRound_ && requestedMode_ != 0) {
+            const char marker[] = " mode ";
+            memcpy(out, marker, sizeof(marker) - 1);
+            out += sizeof(marker) - 1;
+            out = hex<2>(out, requestedMode_);
+        }
         *out++ = '\n';
         send_(context_, frame, static_cast<size_t>(out - frame));
+    }
+
+    void request(Request kind, uint32_t now, const session::Profile* profile = nullptr) {
+        pending_ = kind;
+        sentAt_ = now;
+        const bool mutation = mutationPending();
+        const auto id = mutation ? ++mutationHighWater_ : nextNonce();
+        if (mutation) {
+            rejected_ = Request::none;
+        }
+        uint32_t scope = 0;
+        const char* verb = verbFor(kind, id, scope);
+        key_ = {boot_, id, scope};
+        sendFrame(kind, verb, profile);
     }
 
     uint64_t nextNonce() {
@@ -312,34 +380,50 @@ private:
             return;
         }
         if (pending_ == Request::hello) {
-            if (reply.hasFirmware) {
-                return;
-            }
-            if (reply.code != uart::Code::ok || (reply.features & uart::passiveVisitFeature) == 0) {
-                reconnect(Link::incompatible, now);
-                return;
-            }
-            supportsRounds_ = (reply.features & uart::passiveRoundFeature) != 0;
-            supportsScan_ = supportsRounds_ && (reply.features & uart::scanFeature) != 0;
-            supportsRoundDetail_ =
-                supportsRounds_ && (reply.features & uart::roundDetailFeature) != 0;
-            supportsJournal_ =
-                supportsRounds_ && (reply.features & uart::sessionJournalFeature) != 0;
-            boot_ = reply.envelope.key.boot;
-            if (boot_ != mutationBoot_) {
-                mutationBoot_ = boot_;
-                mutationHighWater_ = 0;
-                rejected_ = Request::none;
-            }
-            rememberMutation(reply.lastMutation);
-            pending_ = Request::none;
-            link_ = Link::connecting;
-            wait_ = {now, 0};
+            acceptHello(reply, now);
             return;
         }
+        routeReply(reply, now);
+    }
 
+    void acceptHello(const uart::Reply& reply, uint32_t now) {
+        if (reply.hasFirmware) {
+            return;
+        }
+        if (reply.code != uart::Code::ok || (reply.features & uart::passiveVisitFeature) == 0) {
+            reconnect(Link::incompatible, now);
+            return;
+        }
+        supportsRounds_ = (reply.features & uart::passiveRoundFeature) != 0;
+        supportsScan_ = supportsRounds_ && (reply.features & uart::scanFeature) != 0;
+        supportsRoundDetail_ = supportsRounds_ && (reply.features & uart::roundDetailFeature) != 0;
+        supportsJournal_ = supportsRounds_ && (reply.features & uart::sessionJournalFeature) != 0;
+        supportsCaptureModes_ = supportsRounds_ && (reply.features & uart::captureModeFeature) != 0;
+        if (supportsCaptureModes_) {
+            // Read the mode list again for this boot; keep any stored list and the choice.
+            modesPending_ = true;
+            modesTried_ = false;
+        } else {
+            boardModeCount_ = 0;
+            modesPending_ = false;
+        }
+        boot_ = reply.envelope.key.boot;
+        if (boot_ != mutationBoot_) {
+            mutationBoot_ = boot_;
+            mutationHighWater_ = 0;
+            rejected_ = Request::none;
+        }
+        rememberMutation(reply.lastMutation);
+        pending_ = Request::none;
+        link_ = Link::connecting;
+        wait_ = {now, 0};
+    }
+
+    void routeReply(const uart::Reply& reply, uint32_t now) {
         if (pending_ == Request::firmware) {
             acceptFirmware(reply, now);
+        } else if (pending_ == Request::modes) {
+            acceptModes(reply, now);
         } else if (pending_ == Request::scan || pending_ == Request::scan_read ||
                    pending_ == Request::scan_stop) {
             acceptScan(reply, now);
@@ -360,6 +444,23 @@ private:
             firmwareState_ = BoardFirmware::known;
         } else {
             firmwareState_ = BoardFirmware::unknown;
+        }
+        rememberMutation(reply.lastMutation);
+        pending_ = Request::none;
+        wait_ = {now, 0};
+    }
+
+    void acceptModes(const uart::Reply& reply, uint32_t now) {
+        // Only an ok reply that carries the modes list, and nothing else, updates the stored list.
+        // Any other reply keeps the link up and leaves the choice pending for the next retry.
+        if (reply.code == uart::Code::ok && reply.hasModes && !reply.hasRound &&
+            !reply.hasJournal && !reply.hasScan && !reply.hasFirmware && !reply.hasMode) {
+            boardModeCount_ = reply.modeCount;
+            for (size_t index = 0; index < reply.modeCount && index < sizeof(boardModeIds_);
+                 ++index) {
+                boardModeIds_[index] = reply.modeIds[index];
+            }
+            modesPending_ = false;
         }
         rememberMutation(reply.lastMutation);
         pending_ = Request::none;
@@ -453,7 +554,10 @@ private:
                 if (result != reply.outcome) {
                     return false;
                 }
-            } else if (result == Outcome::saved) {
+            } else if (result == Outcome::saved ||
+                       (reply.hasMode && result == Outcome::absence_confirmed)) {
+                // Only a round_status_mode reply (the mode marker) may carry digit 5; it counts as
+                // a success, as the board reports a confirmed absence for a future absence mode.
                 saved = true;
             } else if (result != Outcome::not_observed) {
                 return false;
@@ -490,6 +594,12 @@ private:
         if (!round().profile.matches(reply.round.profile) || (finished && state() != reply.state)) {
             return false;
         }
+        // With bit 5 a round or round_stop reply carries the old per-point encoding, which the
+        // round_status_mode snapshot may differ from (e.g. a confirmed absence is 1 there and 5
+        // here), so skip the per-point comparison; round_status_mode fills the results.
+        if (supportsCaptureModes_ && (pending_ == Request::start || pending_ == Request::stop)) {
+            return true;
+        }
         for (size_t index = 0; index < round().profile.size(); ++index) {
             const auto result = round().results[index];
             if ((finished || result != uart::Outcome::none) &&
@@ -498,6 +608,36 @@ private:
             }
         }
         return true;
+    }
+
+    // Store the reply as the snapshot. With bit 5, a round or round_stop reply carries the old
+    // per-point encoding in its aps, so for the same round keep the point results and the reported
+    // mode from the last round_status_mode poll and take only the state, outcome, and profile.
+    void acceptSnapshot(const uart::Reply& reply) {
+        const bool fromRoundMutation =
+            pending_ == Request::start || pending_ == Request::stop;
+        // Merge only within one round: the same boot and session. A new Start reuses the previous
+        // profile but is a new session, so it must not inherit the old round's mode or digit-5
+        // results; it takes the fresh reply whole.
+        const bool sameRound = snapshot_.hasRound &&
+                               snapshot_.envelope.key.boot == reply.envelope.key.boot &&
+                               snapshot_.session == reply.session;
+        if (supportsCaptureModes_ && fromRoundMutation && sameRound &&
+            snapshot_.round.profile.matches(reply.round.profile)) {
+            uart::Reply merged = reply;
+            for (size_t index = 0; index < reply.round.profile.size(); ++index) {
+                // Keep a confirmed absence (digit 5), which the round/round_stop encoding cannot
+                // carry; take every other point result, and the state and outcome, from the reply.
+                if (snapshot_.round.results[index] == uart::Outcome::absence_confirmed) {
+                    merged.round.results[index] = uart::Outcome::absence_confirmed;
+                }
+            }
+            merged.hasMode = snapshot_.hasMode;
+            merged.mode = snapshot_.mode;
+            snapshot_ = merged;
+        } else {
+            snapshot_ = reply;
+        }
     }
 
     void acceptStatus(const uart::Reply& reply, uint32_t now) {
@@ -513,20 +653,24 @@ private:
             wait_ = {now, 0};
             return;
         }
-        const bool expectsDetail = pending_ == Request::status && supportsRoundDetail_;
+        // round_status_mode carries the interrupted marker too, so a bit-5 status read expects it.
+        const bool expectsDetail =
+            pending_ == Request::status && (supportsRoundDetail_ || supportsCaptureModes_);
         const bool hasDetail = reply.round.interruption != uart::VisitInterruption::unknown;
         if (!validSnapshot(reply) || reply.hasScan || reply.hasFirmware ||
             reply.hasRound != expectsRound_ || reply.hasJournal != expectsJournal_ ||
-            hasDetail != expectsDetail ||
+            hasDetail != expectsDetail || reply.hasMode != expectsMode_ ||
             (reply.hasRound && (!validRound(reply) || !consistentRound(reply))) ||
             (mutation && (reply.session != key_.scope || reply.lastMutation != key_.request))) {
             return;
         }
-        snapshot_ = reply;
+        acceptSnapshot(reply);
         rememberMutation(reply.lastMutation);
         if (!mutation) {
             link_ = Link::ready;
         }
+        // The status poll ran this cycle; let the next cycle retry a still-pending modes read.
+        modesTried_ = false;
         pending_ = Request::none;
         wait_ = {now, link_ == Link::ready ? pollMs : 0};
     }
@@ -557,6 +701,13 @@ private:
     bool expectsRound_ = false;
     bool supportsJournal_ = false;
     bool expectsJournal_ = false;
+    bool supportsCaptureModes_ = false;
+    bool expectsMode_ = false;
+    bool modesPending_ = false;
+    bool modesTried_ = false;
+    uint8_t requestedMode_ = 0;
+    uint8_t boardModeCount_ = 0;
+    uint8_t boardModeIds_[8]{};
     Link link_ = Link::connecting;
     Request pending_ = Request::none;
     Request rejected_ = Request::none;

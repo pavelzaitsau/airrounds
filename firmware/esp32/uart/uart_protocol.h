@@ -32,8 +32,9 @@ public:
         // A rejection must keep the IDs from the request it rejected.
         const auto replyVersion = static_cast<unsigned>(hello ? version : request.wireVersion);
         const uint64_t replyBoot = hello ? boot_ : request.key.boot;
-        const auto advertised = features | (round_.supportsJournal() ? sessionJournalFeature : 0U) |
-                                (scan_ != nullptr ? scanFeature | roundDetailFeature : 0U);
+        const auto advertised =
+            features | (round_.supportsJournal() ? sessionJournalFeature : 0U) |
+            (scan_ != nullptr ? scanFeature | roundDetailFeature | captureModeFeature : 0U);
         const int count = snprintf(reply, sizeof(reply),
                                    "!%02x %016" PRIx64 " %016" PRIx64 " %08" PRIx64 " %s %08" PRIx32
                                    " %s %s %016" PRIx64 " %02x",
@@ -50,7 +51,10 @@ public:
         if (code == Code::ok && verb.is("firmware") && !appendFirmware(reply, used)) {
             return false;
         }
-        return finishReply(reply, used, verb);
+        if (code == Code::ok && verb.is("modes") && !appendModes(reply, used)) {
+            return false;
+        }
+        return finishReply(reply, used, verb, code);
     }
 
     void poll() {
@@ -117,17 +121,43 @@ private:
         return true;
     }
 
+    // The board lists Beacon (00) and EAPOL (01), two hex digits each.
+    static bool appendModes(char (&reply)[replyCapacity], size_t& used) {
+        const int count = snprintf(reply + used, sizeof(reply) - used, " modes 02 %02x %02x",
+                                   static_cast<unsigned>(beaconModeId),
+                                   static_cast<unsigned>(eapolModeId));
+        if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
+            return false;
+        }
+        used += static_cast<size_t>(count);
+        return true;
+    }
+
     bool detailQuery(Field verb) const {
         return scan_ != nullptr && verb.is("round_status_detail");
     }
 
-    bool journalQuery(Field verb) const {
-        return round_.supportsJournal() && (verb.is("round_status_log") || detailQuery(verb));
+    // round_status_mode and the modes list read both need feature bit 5, which a board with a scan
+    // advertises.
+    bool modeStatusQuery(Field verb) const {
+        return scan_ != nullptr && verb.is("round_status_mode");
     }
 
-    bool finishReply(char (&reply)[replyCapacity], size_t used, Field verb) const {
-        const bool journal = journalQuery(verb);
-        const bool detail = detailQuery(verb);
+    bool modesListQuery(Field verb) const { return scan_ != nullptr && verb.is("modes"); }
+
+    static bool knownMode(uint8_t modeId) {
+        return modeId == beaconModeId || modeId == eapolModeId;
+    }
+
+    bool journalQuery(Field verb) const {
+        return round_.supportsJournal() &&
+               (verb.is("round_status_log") || detailQuery(verb) || modeStatusQuery(verb));
+    }
+
+    // Appends journal, interrupted, and the mode marker, in that order, before aps. Kept separate
+    // from finishReply so each stays under the clang-tidy cognitive-complexity limit.
+    bool appendRoundMarkers(char (&reply)[replyCapacity], size_t& used, bool journal, bool detail,
+                            bool mode) const {
         if (journal) {
             const auto count = snprintf(reply + used, sizeof(reply) - used, " journal %s",
                                         wireName(round_.journalState()));
@@ -147,26 +177,53 @@ private:
             memcpy(reply + used, marker, sizeof(marker));
             used += sizeof(marker) - 1;
         }
-        if (detail || journal || verb.is("round") || verb.is("round_status") ||
-            verb.is("round_stop")) {
-            constexpr char marker[] = " aps";
-            if (sizeof(reply) - used < sizeof(marker)) {
+        if (mode) {
+            // round_status_mode inserts mode <id> just before aps.
+            const int count = snprintf(reply + used, sizeof(reply) - used, " mode %02x",
+                                       static_cast<unsigned>(round_.status().mode));
+            if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
                 return false;
             }
-            memcpy(reply + used, marker, sizeof(marker));
-            used += sizeof(marker) - 1;
-            const auto& status = round_.status();
-            for (size_t index = 0; index < status.profile.size(); ++index) {
-                const auto& target = status.profile[index];
-                const int count =
-                    snprintf(reply + used, sizeof(reply) - used, " %012" PRIx64 "%02x%x",
-                             session::addressValue(target), static_cast<unsigned>(target.channel),
-                             static_cast<unsigned>(status.results[index]));
-                if (count != 16 || static_cast<size_t>(count) >= sizeof(reply) - used) {
-                    return false;
-                }
-                used += static_cast<size_t>(count);
+            used += static_cast<size_t>(count);
+        }
+        return true;
+    }
+
+    bool appendAps(char (&reply)[replyCapacity], size_t& used) const {
+        constexpr char marker[] = " aps";
+        if (sizeof(reply) - used < sizeof(marker)) {
+            return false;
+        }
+        memcpy(reply + used, marker, sizeof(marker));
+        used += sizeof(marker) - 1;
+        const auto& status = round_.status();
+        for (size_t index = 0; index < status.profile.size(); ++index) {
+            const auto& target = status.profile[index];
+            const int count = snprintf(reply + used, sizeof(reply) - used, " %012" PRIx64 "%02x%x",
+                                       session::addressValue(target),
+                                       static_cast<unsigned>(target.channel),
+                                       static_cast<unsigned>(status.results[index]));
+            if (count != 16 || static_cast<size_t>(count) >= sizeof(reply) - used) {
+                return false;
             }
+            used += static_cast<size_t>(count);
+        }
+        return true;
+    }
+
+    bool finishReply(char (&reply)[replyCapacity], size_t used, Field verb, Code code) const {
+        // A rejected reply carries no round fields: the longest round_status_mode reply fills the
+        // budget, so a non-ok reply must leave aps, journal, interrupted, and mode off or overflow
+        // wireReplyCapacity. See docs/t11.md.
+        const bool ok = code == Code::ok;
+        const bool mode = ok && modeStatusQuery(verb);
+        const bool journal = ok && journalQuery(verb);
+        const bool detail = ok && (detailQuery(verb) || mode);
+        const bool aps = ok && (detail || journal || verb.is("round") || verb.is("round_status") ||
+                                verb.is("round_stop"));
+        if (!appendRoundMarkers(reply, used, journal, detail, mode) ||
+            (aps && !appendAps(reply, used))) {
+            return false;
         }
         if (sizeof(reply) - used < 2) {
             return false;
@@ -190,25 +247,32 @@ private:
         if (request.key.boot != boot_) {
             return Code::wrong_boot;
         }
-        if (readRequest &&
-            (verb.is("status") || verb.is("round_status") || journalQuery(verb) ||
-             detailQuery(verb)) &&
-            fields.atEnd()) {
-            return scope == 0 || scope == session_ ? Code::ok : Code::unknown_session;
-        }
-        if (readRequest && verb.is("firmware") && fields.atEnd()) {
-            return scope == 0 ? Code::ok : Code::unknown_session;
-        }
-        if (readRequest && verb.is("scan_read")) {
-            return readScan(scope, fields, scanIndex);
+        if (readRequest) {
+            return readCommand(verb, scope, fields, scanIndex);
         }
         const bool starts = verb.is("start") || verb.is("round");
         const bool scanMutation = scan_ != nullptr && (verb.is("scan") || verb.is("scan_stop"));
-        if (readRequest ||
-            (!starts && !verb.is("stop") && !verb.is("round_stop") && !scanMutation)) {
+        if (!starts && !verb.is("stop") && !verb.is("round_stop") && !scanMutation) {
             return Code::bad_request;
         }
         return mutate(request.key, verb, starts, fields);
+    }
+
+    // Every read command. An unknown read verb, or a read on a board without the feature it needs,
+    // falls through to bad_request, as it did before R5.
+    Code readCommand(Field verb, uint32_t scope, Fields& fields, size_t& scanIndex) const {
+        if ((verb.is("status") || verb.is("round_status") || journalQuery(verb) ||
+             detailQuery(verb) || modeStatusQuery(verb)) &&
+            fields.atEnd()) {
+            return scope == 0 || scope == session_ ? Code::ok : Code::unknown_session;
+        }
+        if ((verb.is("firmware") || modesListQuery(verb)) && fields.atEnd()) {
+            return scope == 0 ? Code::ok : Code::unknown_session;
+        }
+        if (verb.is("scan_read")) {
+            return readScan(scope, fields, scanIndex);
+        }
+        return Code::bad_request;
     }
 
     Code readScan(uint32_t scope, Fields& fields, size_t& scanIndex) const {
@@ -274,13 +338,27 @@ private:
         session::Profile profile;
         const size_t limit =
             scan_ == nullptr ? session::Profile::legacyCapacity : session::Profile::capacity;
+        uint8_t modeId = beaconModeId;
         do {
+            const Field field = fields.take();
+            // An optional mode <id> tail ends a round, only with feature bit 5. The marker is
+            // tested before the limit, so a full profile can still carry it.
+            if (multiple && scan_ != nullptr && field.is("mode")) {
+                uint64_t id = 0;
+                // A round needs at least one access point; a mode tail with no point is bad grammar.
+                if (profile.size() == 0 || !fields.take().hex(2, id) || !fields.atEnd() ||
+                    !knownMode(static_cast<uint8_t>(id))) {
+                    return Code::bad_request;
+                }
+                modeId = static_cast<uint8_t>(id);
+                break;
+            }
             if (profile.size() == limit) {
                 return Code::bad_request;
             }
             uint64_t bssid = 0;
             uint64_t channel = 0;
-            if (!fields.take().hex(12, bssid) || !fields.take().hex(2, channel) ||
+            if (!field.hex(12, bssid) || !fields.take().hex(2, channel) ||
                 (!multiple && !fields.atEnd())) {
                 return Code::bad_request;
             }
@@ -290,20 +368,24 @@ private:
                 return Code::bad_target;
             }
         } while (!fields.atEnd());
-        return startSession(scope, profile);
+        return startSession(scope, profile, modeId);
     }
 
-    Code startSession(uint32_t scope, const session::Profile& profile) {
+    Code startSession(uint32_t scope, const session::Profile& profile, uint8_t modeId) {
         if (scope == 0) {
             return Code::unknown_session;
         }
         if (scope == session_) {
-            return round_.status().profile.matches(profile) ? Code::ok : Code::conflict;
+            // A retry of the running session compares the profile and the mode; a changed mode is
+            // a conflict, as the reserved protocol defines.
+            return round_.status().profile.matches(profile) && round_.status().mode == modeId
+                       ? Code::ok
+                       : Code::conflict;
         }
         if (scope - 1 != session_) {
             return Code::unknown_session;
         }
-        if (scanning() || !round_.start({boot_, scope}, profile)) {
+        if (scanning() || !round_.start({boot_, scope}, profile, modeId)) {
             return Code::busy;
         }
 

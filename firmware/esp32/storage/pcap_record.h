@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string.h>
+
 #include "pcap_capture.h"
 
 namespace airrounds {
@@ -55,6 +57,34 @@ inline uint8_t frameTypeOf(const uint8_t* frame, size_t size) {
 
 inline bool frameAllowed(const uint8_t* frame, size_t size, uint8_t allowedTypes) {
     return (frameTypeOf(frame, size) & allowedTypes) != 0;
+}
+
+// A second, independent EAPOL gate for the writer, keyed off the declared data type. It re-derives
+// the 802.11 header length, the LLC/SNAP header, and the ethertype locally, and must not include
+// session/eapol.h: storage must not depend on session, and the two gates stay independent only
+// while the writer keeps its own code path. It does not classify the key-info, so a defect in the
+// mode's parser cannot bypass it. See docs/t11.md, "Writer defence in depth".
+inline bool containsEapolEthertype(const uint8_t* frame, size_t size) {
+    if (frame == nullptr || size < managementHeaderSize) {
+        return false;
+    }
+    // Data frames only; a Protected body is ciphertext; a 4-address WDS frame has no LLC here.
+    if ((frame[0] & 0x0cU) != 0x08U || (frame[1] & 0x40U) != 0 || (frame[1] & 0x03U) == 0x03U) {
+        return false;
+    }
+    size_t header = managementHeaderSize;
+    if ((frame[0] & 0x80U) != 0) {
+        header += 2; // QoS Control.
+        if ((frame[1] & 0x80U) != 0) {
+            header += 4; // HT Control.
+        }
+    }
+    if (size < header + 8) { // LLC/SNAP (6) plus the 2-byte ethertype.
+        return false;
+    }
+    static const uint8_t llcSnap[6] = {0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00};
+    return memcmp(frame + header, llcSnap, sizeof(llcSnap)) == 0 && frame[header + 6] == 0x88 &&
+           frame[header + 7] == 0x8e;
 }
 
 inline size_t pcapRecordFileSize(size_t frameSize) {
@@ -127,10 +157,17 @@ inline bool recordsAllowed(const RecordSource& records, uint8_t allowedTypes) {
     if (records.recordCount() == 0) {
         return false;
     }
+    const bool eapolGate = (allowedTypes & dataFrames) != 0;
     for (size_t index = 0; index < records.recordCount(); ++index) {
         const auto record = records.record(index);
         if (!frameAllowed(record.frame, record.size, allowedTypes) ||
             record.size > pcapSnapLength) {
+            return false;
+        }
+        // A data mode saves EAPOL frames only. Every data record must carry the EAPOL ethertype,
+        // whatever other types the mode declared; management and control records are unaffected.
+        if (eapolGate && (frameTypeOf(record.frame, record.size) & dataFrames) != 0 &&
+            !containsEapolEthertype(record.frame, record.size)) {
             return false;
         }
     }

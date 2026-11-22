@@ -364,7 +364,10 @@ void showNetworkProgress(Frame& frame, const App& app) {
     const auto& mode = roundMode(app);
     snprintf(frame.titleRight, sizeof(frame.titleRight), mode.counter,
              flipper::savedPoints(report, mode), static_cast<unsigned>(total));
-    frame.row(report.state == State::running ? mode.listening : mode.saving);
+    char status[32];
+    snprintf(status, sizeof(status), "%s - %s", mode.name,
+             report.state == State::running ? mode.listening : mode.saving);
+    frame.row(status);
     if (slot < total) {
         char name[25];
         networkName(app, report.round.profile[slot], slot, name);

@@ -570,11 +570,11 @@ void scannedFlow() {
                "Start (2)");
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/2", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Listening", "TELEPORT", "Stop");
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
         board.advance(12);
-        screen("Capture", "Captured 1/2", "Listening", "Studio", "Stop");
+        screen("Capture", "Captured 1/2", "Beacon - Listening", "Studio", "Stop");
         board.receiver.outcome = Outcome::not_observed;
         tap(InputKeyOk);
         board.advance(15);
@@ -697,7 +697,7 @@ void fivePointSelection() {
         assert(board.receiver.visits == 0);
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/5", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/5", "Beacon - Listening", "TELEPORT", "Stop");
         assert(board.receiver.visits == 1);
     };
     runApp();
@@ -791,7 +791,7 @@ void rescanKeepsSelection() {
                "Start (2)");
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/2", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Listening", "TELEPORT", "Stop");
         assert(board.receiver.visits == 1);
     };
     runApp();
@@ -1342,13 +1342,13 @@ void scanHomeReopensSession() {
     board.otherClient("0000000000000005 00000001 round 020000000001 0b 020000000002 0b");
     emu::scenario = [&] {
         board.advance(8);
-        screen("Capture", "Captured 0/2", "Listening", "Point 1", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Listening", "Point 1", "Stop");
         tap(InputKeyBack);
         screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
                "v");
         assert(!shows("Scan area"));
         tap(InputKeyOk);
-        screen("Capture", "Captured 0/2", "Listening", "Point 1", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Listening", "Point 1", "Stop");
         tap(InputKeyBack);
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
@@ -1412,7 +1412,7 @@ void beaconLabels() {
         // The progress screen uses the same label.
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/1", "Listening", "3. Hidden network", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "3. Hidden network", "Stop");
     };
     runApp();
 }
@@ -1504,7 +1504,7 @@ void stopKeepsBeaconFocus() {
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::not_observed;
         board.advance(12);
-        screen("Capture", "Captured 0/2", "Listening", "Studio", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Listening", "Studio", "Stop");
         board.receiver.outcome = Outcome::not_observed;
         tap(InputKeyOk);
         board.advance(15);
@@ -1833,13 +1833,13 @@ void scanStopWhileSaving() {
         // The board saves the first point. Stop can still skip the second.
         board.receiver.observed = true;
         board.advance(12);
-        screen("Capture", "Captured 0/2", "Saving", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/2", "Beacon - Saving", "TELEPORT", "Stop");
         tap(InputKeyOk);
         screen("Stopping...", "Waiting for board");
         board.advance();
-        screen("Capture", "Captured 0/2", "Saving", "TELEPORT");
+        screen("Capture", "Captured 0/2", "Beacon - Saving", "TELEPORT");
         tap(InputKeyBack);
-        screen("Capture", "Captured 0/2", "Saving", "TELEPORT");
+        screen("Capture", "Captured 0/2", "Beacon - Saving", "TELEPORT");
         board.receiver.outcome = Outcome::saved;
         board.advance(15);
         screen("Beacons", "1/5 selected", "+ TELEPORT", "Saved", "[x] Studio", "[ ] Guest", "v",
@@ -2067,7 +2067,7 @@ void captureModeEapolRound() {
         tap(InputKeyRight);
         assert(board.sent.find(" mode 01\n") != std::string::npos);
         board.advance(10);
-        screen("Capture", "Captured 0/1", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/1", "EAPOL - Listening", "TELEPORT", "Stop");
         board.receiver.observed = true;
         board.receiver.outcome = Outcome::saved;
         board.advance(15);
@@ -2120,7 +2120,7 @@ void scanLayouts() {
         board.advance(10);
         layout("Pb 4,11 Capture\n"
                "Sb 64,11 Captured 0/3\n"
-               "Sb 5,22 Listening\n"
+               "Sb 5,22 Beacon - Listening\n"
                "Sb 5,33 ABCDEFGHIJKLMNOP\n"
                "OK Stop\n");
         for (unsigned point = 0; point < 3; ++point) {
@@ -2403,7 +2403,7 @@ void scanRestart() {
         tap(InputKeyOk);
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/1", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "TELEPORT", "Stop");
         board.restart(0x0fedcba987654321ULL);
         board.advance(30);
         screen("Devboard restarted", "Check board SD");
@@ -2421,13 +2421,13 @@ void scanRestart() {
         tap(InputKeyBack);
         tap(InputKeyRight);
         board.advance(10);
-        screen("Capture", "Captured 0/1", "Listening", "TELEPORT", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "TELEPORT", "Stop");
         board.restart(0x1fedcba987654321ULL);
         board.advance(30);
         screen("Devboard restarted", "Check board SD");
         board.otherClient("0000000000000005 00000001 round 020000000002 0b");
         board.advance(10);
-        screen("Capture", "Captured 0/1", "Listening", "Studio", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "Studio", "Stop");
         // This session is not the one Flipper started, so Back leaves it.
         tap(InputKeyBack);
         screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
@@ -2499,7 +2499,7 @@ void anotherClientTakesTheSessionId() {
         board.otherClient("0000000000000050 00000001 round 020000000002 0b");
         board.advance(30);
         board.comeBack();
-        screen("Capture", "Captured 0/1", "Listening", "Studio", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "Studio", "Stop");
         tap(InputKeyBack);
         screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
                "v");
@@ -2524,7 +2524,7 @@ void anotherClientTakesTheSessionId() {
         later.otherClient("0000000000000051 00000002 round 020000000003 0b");
         later.advance(30);
         later.comeBack();
-        screen("Capture", "Captured 0/1", "Listening", "Guest", "Stop");
+        screen("Capture", "Captured 0/1", "Beacon - Listening", "Guest", "Stop");
         tap(InputKeyBack);
         screen("AirRounds", "Session status", "Capture mode", "Flash board hardware", "Test board",
                "v");

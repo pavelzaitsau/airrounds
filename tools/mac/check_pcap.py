@@ -16,6 +16,11 @@ LINK_TYPES = {1: "Ethernet", 105: "raw 802.11"}
 MAX_RECORD_SIZE = 256 * 1024
 RECEIPT = struct.Struct("<8sQI")
 RECEIPT_MAGIC = b"ARPCAP\x01\x00"
+# The hashcat MESSAGE_PAIR combinations an attacker can place: one ANonce frame (message 1 or 3)
+# with one SNonce-and-MIC frame (message 2 or 4) from the same client. M1+M2 is also the active
+# mode's crackable set (docs/t12-architecture.md); the rest are pairs the passive mode may catch.
+# The check reports any of them as a success.
+CRACKABLE_PAIRS = ((1, 2), (1, 4), (2, 3), (3, 4))
 
 
 class CheckError(Exception):
@@ -190,20 +195,25 @@ def parse_bssid(value):
 
 
 def report_eapol(bssid, count, size, link_type, clients, has_receipt):
-    """Print the handshake messages per client and return the exit code: 0 for a completed join
-    (messages 3 and 4 from one client), 3 for the target with no completed handshake. Clients are
-    numbered in order of first appearance; no client MAC address is printed."""
+    """Print the handshake messages and the crackable message pairs per client, then return the exit
+    code: 0 when one client holds a valid hashcat message pair (M1+M2, M1+M4, M2+M3, or M3+M4), 3
+    for the target with no such pair. Clients are numbered in order of first appearance; no client MAC
+    address is printed. The check reads no nonce or MIC, so a reported pair means the two messages
+    are present, not that the capture is proven crackable."""
     address = bssid.hex(":")
     receipt = ", receipt matches" if has_receipt else ""
     print(f"EAPOL: {count} record(s), {size} bytes, {link_type}, BSSID {address}{receipt}")
-    joined = False
+    crackable = False
     for index, (_client, messages) in enumerate(clients, start=1):
-        print(f"client {index}: messages " + ", ".join(str(message) for message in sorted(messages)))
-        if {3, 4} <= messages:
-            joined = True
-    if joined:
+        line = f"client {index}: messages " + ", ".join(str(message) for message in sorted(messages))
+        pairs = [f"M{a}+M{b}" for a, b in CRACKABLE_PAIRS if a in messages and b in messages]
+        if pairs:
+            line += "; pairs " + ", ".join(pairs)
+            crackable = True
+        print(line)
+    if crackable:
         return 0
-    print(f"no completed handshake: BSSID {address}", file=sys.stderr)
+    print(f"no crackable pair: BSSID {address}", file=sys.stderr)
     return 3
 
 

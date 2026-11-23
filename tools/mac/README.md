@@ -51,18 +51,25 @@ python3 tools/mac/check_pcap.py path/to/capture.pcap \
   --eapol --bssid 02:00:00:00:00:01
 ```
 
-A completed handshake needs messages 3 and 4 from one client. A wrong passphrase
-repeats messages 1 and 2, so messages 1 or 2 alone are no join.
+The check reports the crackable message pairs per client. A pair is one ANonce
+frame (message 1 or 3) with one SNonce-and-MIC frame (message 2 or 4) from one
+client: M1+M2, M1+M4, M2+M3, or M3+M4, the hashcat `MESSAGE_PAIR` combinations.
+M1+M2 is also the active mode's crackable set. One such pair from a single
+client exits 0; the target with no pair exits 3. The check reads no nonce, MIC,
+or replay counter, so a reported pair means the two messages are present, not
+that the capture is proven crackable: the attacker still needs a nonzero SNonce,
+a nonzero MIC, matching replay counters, and the SSID. A pair from two different
+clients is not a pair.
 
 | Result | Exit code | Meaning |
 | --- | --- | --- |
-| `valid`, `EAPOL` | 0 | All requested checks passed; with `--eapol`, one client completed a handshake |
+| `valid`, `EAPOL` | 0 | All requested checks passed; with `--eapol`, one client holds a crackable message pair |
 | `truncated` | 1 | A header or record ends early, or the receipt expects more bytes |
 | `damaged` | 1 | An invalid field, empty capture, or receipt mismatch |
 | `unsupported` | 1 | The checker cannot handle the format, link type, or record size, or a record is not an EAPOL-Key frame for the BSSID |
 | `read error` | 1 | The checker could not open or read an input file |
 | Usage error | 2 | The command has an invalid or missing argument, or `--eapol` without `--bssid` |
-| `not observed`, `no completed handshake` | 3 | The capture passed the file checks, with no usable record for the BSSID, or no client completed a handshake |
+| `not observed`, `no crackable pair` | 3 | The capture passed the file checks, with no usable record for the BSSID, or no client holds a crackable message pair |
 
 ## Reproduce T3 on a Mac
 

@@ -51,7 +51,7 @@ transferred capture. It verifies the file structure and the receipt. With
 `--bssid`, it confirms that the file holds a beacon from that access point and
 reports its SSID. With `--eapol` and `--bssid`, it confirms that every record is
 an EAPOL-Key frame for that access point, reports which handshake messages the
-file holds per client, and reports whether one client completed a handshake. It
+file holds per client, and reports the crackable message pairs. It
 reads the 802.11 header, the EAPOL packet type, and the key-info flags; it reads
 the client address only to group frames by client, and prints no client MAC
 address. It reads no nonce, MIC, or key data. Decryption and key derivation stay

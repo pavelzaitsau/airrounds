@@ -17,10 +17,16 @@ enum class Request {
     scan_read,
     scan_stop,
     firmware,
-    modes
+    modes,
+    card,
+    selftest
 };
 // The board firmware version: not asked for, being read, not reported by an older board, or known.
 enum class BoardFirmware { none, reading, unknown, known };
+// The board microSD state: not asked for, being read, confirmed absent, or confirmed present.
+enum class BoardCard { none, reading, absent, present };
+// A board self-test run: not started, in flight, finished with a result, unsupported, or no answer.
+enum class SelfTestRun { idle, running, done, unsupported, failed };
 
 class SessionClient {
 public:
@@ -46,6 +52,26 @@ public:
 
     BoardFirmware boardFirmware() const { return firmwareState_; }
     const char* firmware() const { return firmware_; }
+
+    // Feature bit 6: the board runs a self-test and reports the microSD mount state.
+    bool supportsSelfTest() const { return supportsSelfTest_; }
+    BoardCard cardState() const { return cardState_; }
+    // Block Scan and Capture only on a confirmed absent card; an unknown state does not block. The
+    // board reports the card once after the hello, so the gate uses the connect-time state; the
+    // firmware round preflight is the backstop for a card pulled after the connect.
+    bool cardMissing() const { return cardState_ == BoardCard::absent; }
+
+    SelfTestRun selfTestRun() const { return selfTestRun_; }
+    const uart::SelfTest& selfTest() const { return selfTest_; }
+    // Run the board self-test once; the result reaches selfTest() when selfTestRun() is done.
+    void runSelfTest() {
+        if (!supportsSelfTest_) {
+            selfTestRun_ = SelfTestRun::unsupported;
+        } else if (selfTestRun_ != SelfTestRun::running) {
+            selfTestRun_ = SelfTestRun::running;
+            selfTestPending_ = true;
+        }
+    }
 
     // Feature bit 5: the board lists capture modes and runs R5.
     bool supportsCaptureModes() const { return supportsCaptureModes_; }
@@ -145,11 +171,15 @@ public:
 
     void poll(uint32_t now) {
         if (pending_ != Request::none) {
-            if (now - sentAt_ < requestTimeoutMs) {
+            // The board runs the self-test inline and answers only when it finishes, so its reply
+            // gets a longer deadline than a plain read.
+            const uint32_t deadline =
+                pending_ == Request::selftest ? selfTestTimeoutMs : requestTimeoutMs;
+            if (now - sentAt_ < deadline) {
                 return;
             }
-            // A version read without a usable reply must not drop the link, or a board that
-            // answers in an unknown form would never reach a status read.
+            // A read without a usable reply must not drop the link, or a board that answers in an
+            // unknown form would never reach a status read.
             if (pending_ == Request::firmware) {
                 firmwareState_ = BoardFirmware::unknown;
                 pending_ = Request::none;
@@ -157,6 +187,14 @@ public:
             } else if (pending_ == Request::modes) {
                 // A modes timeout keeps the link up and leaves the choice pending; the status poll
                 // runs next (modesTried_ stays set) and modes retries after it.
+                pending_ = Request::none;
+                wait_ = {now, 0};
+            } else if (pending_ == Request::card) {
+                cardState_ = BoardCard::none;
+                pending_ = Request::none;
+                wait_ = {now, 0};
+            } else if (pending_ == Request::selftest) {
+                selfTestRun_ = SelfTestRun::failed;
                 pending_ = Request::none;
                 wait_ = {now, 0};
             } else {
@@ -169,6 +207,11 @@ public:
                 request(Request::hello, now);
             } else if (firmwareState_ == BoardFirmware::reading) {
                 request(Request::firmware, now);
+            } else if (supportsSelfTest_ && cardState_ == BoardCard::reading) {
+                request(Request::card, now);
+            } else if (selfTestPending_) {
+                selfTestPending_ = false;
+                request(Request::selftest, now);
             } else if (cancelScanPending_) {
                 cancelScanPending_ = false;
                 request(Request::scan_stop, now);
@@ -209,6 +252,9 @@ public:
 
 private:
     static constexpr uint32_t requestTimeoutMs = 900;
+    // The board runs the self-test inline (microSD mount, radio, a short probe, a test write), so
+    // its reply can take a few seconds; give it a wider deadline than a plain read.
+    static constexpr uint32_t selfTestTimeoutMs = 4000;
     static constexpr uint32_t reconnectMs = 300;
     static constexpr uint32_t pollMs = 350;
 
@@ -234,6 +280,9 @@ private:
         }
         cancelScanPending_ = false;
         modesTried_ = false;
+        cardState_ = BoardCard::none;
+        selfTestPending_ = false;
+        selfTestRun_ = SelfTestRun::idle;
         link_ = reason;
         pending_ = Request::none;
         length_ = 0;
@@ -290,6 +339,10 @@ private:
             return "firmware";
         case Request::modes:
             return "modes";
+        case Request::card:
+            return "card";
+        case Request::selftest:
+            return "selftest";
         case Request::status:
             expectsRound_ = supportsRounds_;
             expectsJournal_ = supportsJournal_;
@@ -366,7 +419,12 @@ private:
             !uart::matchesReplyKey(reply.envelope.key, key_)) {
             return;
         }
-        if (now - sentAt_ >= requestTimeoutMs) {
+        // The self-test reply is slow by design; match the per-request deadline poll() waits, or a
+        // reply that legitimately arrives after requestTimeoutMs would match the key and then drop
+        // the link, discarding the result.
+        const uint32_t deadline =
+            pending_ == Request::selftest ? selfTestTimeoutMs : requestTimeoutMs;
+        if (now - sentAt_ >= deadline) {
             transportLost(now);
             return;
         }
@@ -407,6 +465,11 @@ private:
             boardModeCount_ = 0;
             modesPending_ = false;
         }
+        supportsSelfTest_ = (reply.features & uart::selfTestFeature) != 0;
+        // Read the microSD state once for this boot; the self-test waits for the operator.
+        cardState_ = supportsSelfTest_ ? BoardCard::reading : BoardCard::none;
+        selfTestRun_ = SelfTestRun::idle;
+        selfTestPending_ = false;
         boot_ = reply.envelope.key.boot;
         if (boot_ != mutationBoot_) {
             mutationBoot_ = boot_;
@@ -424,12 +487,47 @@ private:
             acceptFirmware(reply, now);
         } else if (pending_ == Request::modes) {
             acceptModes(reply, now);
+        } else if (pending_ == Request::card) {
+            acceptCard(reply, now);
+        } else if (pending_ == Request::selftest) {
+            acceptSelfTest(reply, now);
         } else if (pending_ == Request::scan || pending_ == Request::scan_read ||
                    pending_ == Request::scan_stop) {
             acceptScan(reply, now);
         } else {
             acceptStatus(reply, now);
         }
+    }
+
+    void acceptCard(const uart::Reply& reply, uint32_t now) {
+        if (reply.hasRound || reply.hasJournal || reply.hasScan || reply.hasFirmware ||
+            reply.hasCard != (reply.code == uart::Code::ok)) {
+            return;
+        }
+        // An older or busy board refuses and leaves the state unknown; the link stays up.
+        cardState_ = !reply.hasCard ? BoardCard::none
+                     : reply.card   ? BoardCard::present
+                                    : BoardCard::absent;
+        rememberMutation(reply.lastMutation);
+        pending_ = Request::none;
+        wait_ = {now, 0};
+    }
+
+    void acceptSelfTest(const uart::Reply& reply, uint32_t now) {
+        if (reply.hasRound || reply.hasJournal || reply.hasScan || reply.hasFirmware ||
+            reply.hasSelfTest != (reply.code == uart::Code::ok)) {
+            return;
+        }
+        if (reply.hasSelfTest) {
+            selfTest_ = reply.selfTest;
+            selfTestRun_ = SelfTestRun::done;
+        } else {
+            // A refusal, a busy board, or an older board: report the run as failed.
+            selfTestRun_ = SelfTestRun::failed;
+        }
+        rememberMutation(reply.lastMutation);
+        pending_ = Request::none;
+        wait_ = {now, 0};
     }
 
     void acceptFirmware(const uart::Reply& reply, uint32_t now) {
@@ -534,18 +632,18 @@ private:
     static bool validRound(const uart::Reply& reply) {
         using uart::Outcome;
         using uart::State;
-        const auto& round = reply.round;
-        const size_t count = round.profile.size();
-        const size_t next = round.next();
+        const auto& roundStatus = reply.round;
+        const size_t count = roundStatus.profile.size();
+        const size_t next = roundStatus.next();
         if ((count == 0) != (reply.state == State::idle) ||
-            (round.interruption == uart::VisitInterruption::yes &&
+            (roundStatus.interruption == uart::VisitInterruption::yes &&
              (reply.state != State::stopped || next == 0 ||
-              round.results[next - 1] != Outcome::not_observed))) {
+              roundStatus.results[next - 1] != Outcome::not_observed))) {
             return false;
         }
         bool saved = false;
         for (size_t index = 0; index < count; ++index) {
-            const auto result = round.results[index];
+            const auto result = roundStatus.results[index];
             if (index >= next) {
                 if (result != Outcome::none) {
                     return false;
@@ -614,8 +712,7 @@ private:
     // per-point encoding in its aps, so for the same round keep the point results and the reported
     // mode from the last round_status_mode poll and take only the state, outcome, and profile.
     void acceptSnapshot(const uart::Reply& reply) {
-        const bool fromRoundMutation =
-            pending_ == Request::start || pending_ == Request::stop;
+        const bool fromRoundMutation = pending_ == Request::start || pending_ == Request::stop;
         // Merge only within one round: the same boot and session. A new Start reuses the previous
         // profile but is a new session, so it must not inherit the old round's mode or digit-5
         // results; it takes the fresh reply whole.
@@ -718,6 +815,11 @@ private:
     Delay wait_{};
     uint32_t sentAt_ = 0;
     BoardFirmware firmwareState_ = BoardFirmware::none;
+    bool supportsSelfTest_ = false;
+    BoardCard cardState_ = BoardCard::none;
+    SelfTestRun selfTestRun_ = SelfTestRun::idle;
+    bool selfTestPending_ = false;
+    uart::SelfTest selfTest_;
     char firmware_[sizeof(uart::Reply::firmware)]{};
     char line_[uart::wireReplyCapacity]{};
     size_t length_ = 0;

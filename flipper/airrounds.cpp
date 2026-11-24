@@ -14,9 +14,15 @@
 #include <gui/view_dispatcher.h>
 
 #include "../firmware/esp32/uart/capture_path.h"
+#include "esp_flasher.h"
 #include "network_list.h"
 #include "profile_storage.h"
 #include "ui_state.h"
+
+#ifndef AIRROUNDS_EMULATOR
+#include <furi_hal_gpio.h>
+#include <furi_hal_resources.h>
+#endif
 
 namespace {
 
@@ -43,6 +49,9 @@ enum class Page {
     remove,
     review,
     board,
+    testBoard,
+    card,
+    flash,
     status,
     last,
     results,
@@ -58,6 +67,9 @@ enum class Action : uint8_t {
     chooseMode,
     placeholder,
     board,
+    testBoard,
+    flashBoard,
+    flashConfirm,
     start,
     stop,
     refresh,
@@ -134,8 +146,17 @@ struct Display {
     Binding drawn;
 };
 
+using flipper::FlashError;
+using flipper::FlashManifest;
+using flipper::FlashStage;
+
+// The Flash board flow: idle, no image on the card, the active-image attestation, the flash in
+// progress, a verified flash, or a failed flash.
+enum class FlashPhase { idle, noImage, attest, flashing, done, failed };
+
 struct App {
-    App(Storage* storage, uint64_t nonce) : client(send, this, nonce), store(storage) {}
+    App(Storage* storageHandle, uint64_t nonce)
+        : client(send, this, nonce), store(storageHandle), storage(storageHandle) {}
 
     static void send(void* context, const char* bytes, size_t count) {
         auto& app = *static_cast<App*>(context);
@@ -144,6 +165,7 @@ struct App {
 
     flipper::SessionClient client;
     flipper::ProfileStorage store;
+    Storage* storage = nullptr;
     ViewDispatcher* dispatcher = nullptr;
     View* view = nullptr;
     ByteInput* keyboard = nullptr;
@@ -189,6 +211,19 @@ struct App {
     size_t resultPoint = 0;
     ProfileSave saveResult = ProfileSave::saved;
     Binding held{};
+
+    FlashPhase flashPhase = FlashPhase::idle;
+    FlashManifest flashManifest;
+    FlashStage flashStage = FlashStage::idle;
+    uint32_t flashDone = 0;
+    uint32_t flashTotal = 0;
+    FlashError flashError = FlashError::none;
+    bool flashing = false;
+#ifndef AIRROUNDS_EMULATOR
+    FuriThread* flashThread = nullptr;
+    File* flashImage = nullptr;
+    std::atomic<bool> flashComplete{false};
+#endif
 };
 
 const char* actionLabel(Action action) {
@@ -240,6 +275,8 @@ constexpr const char* scanMenu[]{"Scan area", "Capture mode", "Flash board hardw
                                  "About"};
 constexpr size_t scanMenuSize = sizeof(scanMenu) / sizeof(scanMenu[0]);
 constexpr size_t captureModeItem = 1;
+constexpr size_t flashBoardItem = 2;
+constexpr size_t testBoardItem = 3;
 constexpr size_t aboutItem = scanMenuSize - 1;
 
 size_t topRow(size_t focus, size_t visible = visibleNetworkRows) {
@@ -263,6 +300,26 @@ bool canStart(const App& app) {
 // whether the status screens call the board ready.
 bool readyToStart(const App& app) {
     return app.client.supportsScan() ? app.client.canStart(1) : canStart(app);
+}
+
+// A board with the microSD feature blocks Scan and Capture when it reports no card. An older board
+// never blocks, and the firmware round preflight is the backstop if the card is pulled later.
+bool cardBlocks(const App& app) {
+    return app.client.supportsSelfTest() && app.client.cardMissing();
+}
+
+const char* checkText(uart::CheckResult result) {
+    switch (result) {
+    case uart::CheckResult::pass:
+        return "Pass";
+    case uart::CheckResult::fail:
+        return "Fail";
+    case uart::CheckResult::blocked:
+        return "Blocked";
+    case uart::CheckResult::not_run:
+        return "-";
+    }
+    return "-";
 }
 
 // The labels of a running or finished round come from the mode round_status_mode reports; until
@@ -459,9 +516,16 @@ void showHome(Frame& frame, const App& app) {
         frame.scrollDown = first + visibleMenuRows < scanMenuSize;
         frame.scrollDownY = 63;
         frame.selected = static_cast<int>(app.focus - first);
-        const auto action = app.focus == 0                 ? (busy ? Action::status : Action::scan)
-                            : app.focus == captureModeItem ? Action::captureMode
-                                                           : Action::placeholder;
+        Action action = Action::placeholder;
+        if (app.focus == 0) {
+            action = busy ? Action::status : Action::scan;
+        } else if (app.focus == captureModeItem) {
+            action = Action::captureMode;
+        } else if (app.focus == flashBoardItem) {
+            action = Action::flashBoard;
+        } else if (app.focus == testBoardItem) {
+            action = Action::testBoard;
+        }
         frame.binding = {action, app.focus, {}};
         return;
     }
@@ -639,6 +703,306 @@ void showCaptureMode(Frame& frame, const App& app) {
     frame.binding = {Action::chooseMode, app.focus, {}};
 }
 
+void go(App& app, Page page, size_t focus = 0);
+
+// Read the release manifest from the card and confirm the image is present at the manifest size.
+// valid is false when either file is missing or the image size does not match.
+FlashManifest readFlashManifest(Storage* storage) {
+    FlashManifest manifest;
+    // The CI manifest is pretty-printed JSON with a 64-hex sha256 before the md5, so it runs past
+    // 256 bytes; a short read truncates before md5 and parseManifest rejects it. 512 holds the
+    // whole file with headroom for the build identity fields.
+    char json[512];
+    File* file = storage_file_alloc(storage);
+    size_t count = 0;
+    if (storage_file_open(file, APP_DATA_PATH("airrounds.manifest"), FSAM_READ,
+                          FSOM_OPEN_EXISTING)) {
+        count = storage_file_read(file, reinterpret_cast<unsigned char*>(json), sizeof(json) - 1);
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    if (count == 0) {
+        return manifest;
+    }
+    json[count] = '\0';
+    manifest = flipper::parseManifest(json);
+    File* image = storage_file_alloc(storage);
+    const bool ready =
+        storage_file_open(image, APP_DATA_PATH("airrounds.bin"), FSAM_READ, FSOM_OPEN_EXISTING) &&
+        storage_file_size(image) == manifest.size;
+    storage_file_close(image);
+    storage_file_free(image);
+    if (!ready) {
+        manifest.valid = false;
+    }
+    return manifest;
+}
+
+const char* flashStageText(FlashStage stage) {
+    switch (stage) {
+    case FlashStage::enter:
+        return "Entering loader";
+    case FlashStage::sync:
+        return "Syncing";
+    case FlashStage::begin:
+        return "Erasing";
+    case FlashStage::write:
+        return "Writing";
+    case FlashStage::end:
+        return "Finishing";
+    case FlashStage::verify:
+        return "Verifying";
+    case FlashStage::reset:
+        return "Resetting";
+    case FlashStage::done:
+        return "Done";
+    case FlashStage::idle:
+        break;
+    }
+    return "Starting";
+}
+
+const char* flashErrorText(FlashError error) {
+    switch (error) {
+    case FlashError::manifest:
+        return "No image on card";
+    case FlashError::sync:
+        return "No board response";
+    case FlashError::image:
+        return "Image read failed";
+    case FlashError::mismatch:
+        return "Verify mismatch";
+    case FlashError::begin:
+    case FlashError::write:
+    case FlashError::end:
+        return "Write failed";
+    case FlashError::io:
+    case FlashError::overflow:
+    case FlashError::none:
+        break;
+    }
+    return "Flash failed";
+}
+
+#ifndef AIRROUNDS_EMULATOR
+// The devboard routes the ESP IO0 (boot select) and EN (reset) to these Flipper GPIO. The bench
+// confirms the mapping; if it is wrong, the operator holds BOOT and taps RESET and the sync retries
+// still catch the ROM loader.
+const GpioPin* const flashBootPin = &gpio_ext_pc0;
+const GpioPin* const flashResetPin = &gpio_ext_pc1;
+
+void flashWrite(void* context, const uint8_t* data, size_t size) {
+    auto& app = *static_cast<App*>(context);
+    furi_hal_serial_tx(app.serial, data, size);
+}
+
+bool flashReadByte(void* context, uint8_t* byte, uint32_t timeoutMs) {
+    auto& app = *static_cast<App*>(context);
+    uart::TimedByte received{};
+    if (furi_message_queue_get(app.rx, &received, timeoutMs) != FuriStatusOk) {
+        return false;
+    }
+    *byte = received.value;
+    return true;
+}
+
+void flashBoot(void*, bool bootDown) {
+    furi_hal_gpio_init(flashBootPin, GpioModeOutputPushPull, GpioPullNo, GpioSpeedLow);
+    furi_hal_gpio_init(flashResetPin, GpioModeOutputPushPull, GpioPullNo, GpioSpeedLow);
+    // A low boot line at the reset edge enters the ROM loader; a high one boots the application.
+    furi_hal_gpio_write(flashBootPin, !bootDown);
+    furi_hal_gpio_write(flashResetPin, false);
+    furi_delay_ms(20);
+    furi_hal_gpio_write(flashResetPin, true);
+    furi_delay_ms(100);
+    furi_hal_gpio_write(flashBootPin, true);
+}
+
+size_t flashReadImage(void* context, uint32_t offset, uint8_t* out, size_t size) {
+    auto& app = *static_cast<App*>(context);
+    if (!storage_file_seek(app.flashImage, offset, true)) {
+        return 0;
+    }
+    return storage_file_read(app.flashImage, out, size);
+}
+
+void flashProgress(void* context, FlashStage stage, uint32_t done, uint32_t total) {
+    auto& app = *static_cast<App*>(context);
+    app.flashStage = stage;
+    app.flashDone = done;
+    app.flashTotal = total;
+}
+
+int32_t flashWorker(void* context) {
+    auto& app = *static_cast<App*>(context);
+    flipper::FlasherIo io;
+    io.context = &app;
+    io.write = flashWrite;
+    io.readByte = flashReadByte;
+    io.boot = flashBoot;
+    io.readImage = flashReadImage;
+    // The flasher holds the block, packet, and SLIP buffers, a few kilobytes, so it lives on the
+    // heap rather than this worker's stack.
+    auto* flasher = new (std::nothrow) flipper::EspFlasher(io);
+    app.flashError = flasher == nullptr ? FlashError::overflow
+                                        : flasher->flash(app.flashManifest, flashProgress, &app);
+    delete flasher;
+    app.flashComplete.store(true, std::memory_order_release);
+    return 0;
+}
+#endif
+
+void beginFlash(App& app) {
+    app.flashPhase = FlashPhase::flashing;
+    app.flashStage = FlashStage::enter;
+    app.flashDone = 0;
+    app.flashTotal =
+        static_cast<uint32_t>((app.flashManifest.size + flipper::EspFlasher::blockSize - 1) /
+                              flipper::EspFlasher::blockSize);
+    app.flashError = FlashError::none;
+#ifndef AIRROUNDS_EMULATOR
+    // The flasher owns the UART and the receive queue while it runs; the status poll resumes after.
+    app.flashing = true;
+    app.flashComplete.store(false, std::memory_order_relaxed);
+    app.flashImage = storage_file_alloc(app.storage);
+    if (!storage_file_open(app.flashImage, APP_DATA_PATH("airrounds.bin"), FSAM_READ,
+                           FSOM_OPEN_EXISTING)) {
+        storage_file_free(app.flashImage);
+        app.flashImage = nullptr;
+        app.flashing = false;
+        app.flashError = FlashError::image;
+        app.flashPhase = FlashPhase::failed;
+        return;
+    }
+    app.flashThread = furi_thread_alloc_ex("airrounds-flash", 4096, flashWorker, &app);
+    furi_thread_start(app.flashThread);
+#endif
+}
+
+void pollFlash(App& app) {
+    if (app.flashPhase != FlashPhase::flashing) {
+        return;
+    }
+#ifndef AIRROUNDS_EMULATOR
+    if (!app.flashComplete.load(std::memory_order_acquire)) {
+        return;
+    }
+    furi_thread_join(app.flashThread);
+    furi_thread_free(app.flashThread);
+    app.flashThread = nullptr;
+    if (app.flashImage != nullptr) {
+        storage_file_close(app.flashImage);
+        storage_file_free(app.flashImage);
+        app.flashImage = nullptr;
+    }
+    app.flashing = false;
+    app.flashPhase = app.flashError == FlashError::none ? FlashPhase::done : FlashPhase::failed;
+    // The board rebooted into the new firmware, so read it again from the next hello.
+    app.client.refresh(furi_get_tick());
+#else
+    if (emu::flashFinish) {
+        emu::flashFinish = false;
+        app.flashError = emu::flashSucceeds ? FlashError::none : FlashError::sync;
+        app.flashPhase = emu::flashSucceeds ? FlashPhase::done : FlashPhase::failed;
+    }
+#endif
+}
+
+void startFlashFlow(App& app) {
+    app.flashManifest = readFlashManifest(app.storage);
+    if (!app.flashManifest.valid) {
+        app.flashPhase = FlashPhase::noImage;
+    } else if (app.flashManifest.active) {
+        app.flashPhase = FlashPhase::attest;
+    } else {
+        beginFlash(app);
+    }
+    go(app, Page::flash);
+}
+
+void showFlash(Frame& frame, const App& app) {
+    switch (app.flashPhase) {
+    case FlashPhase::noImage:
+        title(frame, "No image");
+        frame.row("Install the release");
+        frame.row("to apps_data/airrounds");
+        return;
+    case FlashPhase::attest:
+        title(frame, "Active TX image");
+        frame.row("Transmits deauth.");
+        frame.row("Own network only.");
+        snprintf(frame.hint, sizeof(frame.hint), "%s", "OK to flash");
+        frame.binding = {Action::flashConfirm, 0, {}};
+        return;
+    case FlashPhase::flashing: {
+        title(frame, "Flashing...");
+        frame.row(flashStageText(app.flashStage));
+        if (app.flashTotal != 0) {
+            char progress[24];
+            snprintf(progress, sizeof(progress), "Block %u / %u",
+                     static_cast<unsigned>(app.flashDone), static_cast<unsigned>(app.flashTotal));
+            frame.row(progress);
+        }
+        return;
+    }
+    case FlashPhase::done:
+        title(frame, "Board flashed");
+        frame.row("Image verified.");
+        return;
+    case FlashPhase::failed:
+        title(frame, "Flash failed");
+        frame.row(flashErrorText(app.flashError));
+        // The Flipper cannot drive the Devboard into the ROM loader on its own, so a sync failure
+        // means the board never entered it. Prompt the manual entry the sync retries then catch.
+        if (app.flashError == FlashError::sync) {
+            frame.row("Hold BOOT, tap RESET");
+        }
+        snprintf(frame.hint, sizeof(frame.hint), "%s", "OK to retry");
+        frame.binding = {Action::flashBoard, 0, {}};
+        return;
+    case FlashPhase::idle:
+        break;
+    }
+    title(frame, "Flash board hardware");
+}
+
+void showTestBoard(Frame& frame, const App& app) {
+    title(frame, "Test board");
+    switch (app.client.selfTestRun()) {
+    case flipper::SelfTestRun::unsupported:
+        frame.row("Not supported");
+        frame.row("Update board firmware");
+        return;
+    case flipper::SelfTestRun::running:
+        frame.row("Testing...");
+        return;
+    case flipper::SelfTestRun::failed:
+        frame.row("No response");
+        snprintf(frame.hint, sizeof(frame.hint), "%s", "Press OK to retry");
+        frame.binding = {Action::testBoard, 0, {}};
+        return;
+    case flipper::SelfTestRun::idle:
+    case flipper::SelfTestRun::done:
+        break;
+    }
+    const auto& result = app.client.selfTest();
+    frame.compact = true;
+    const char* const names[] = {"microSD", "Radio", "Receive", "Write"};
+    const uart::CheckResult checks[] = {result.sd, result.radio, result.probe, result.write};
+    for (size_t index = 0; index < 4; ++index) {
+        frame.row(names[index], checkText(checks[index]));
+    }
+    snprintf(frame.hint, sizeof(frame.hint), "%s", "OK to run again");
+    frame.binding = {Action::testBoard, 0, {}};
+}
+
+void showCard(Frame& frame) {
+    title(frame, "Insert SD card");
+    frame.row("The board needs a");
+    frame.row("microSD card for");
+    frame.row("Scan and Capture.");
+}
+
 Frame makeFrame(const App& app) {
     Frame frame;
     switch (app.page) {
@@ -735,6 +1099,15 @@ Frame makeFrame(const App& app) {
     case Page::board:
     case Page::status:
         showStatus(frame, app);
+        break;
+    case Page::testBoard:
+        showTestBoard(frame, app);
+        break;
+    case Page::card:
+        showCard(frame);
+        break;
+    case Page::flash:
+        showFlash(frame, app);
         break;
     case Page::last:
         if (app.latest.id.session == 0 && app.client.link() == Link::connecting &&
@@ -900,7 +1273,7 @@ void paint(App& app, bool reset = false) {
 constexpr uint32_t mainView = 0;
 constexpr uint32_t addressView = 1;
 
-void go(App& app, Page page, size_t focus = 0) {
+void go(App& app, Page page, size_t focus) {
     const bool switching = (app.page == Page::address) != (page == Page::address);
     app.page = page;
     app.focus = focus;
@@ -991,6 +1364,10 @@ void enterNetworks(App& app) {
 }
 
 void scan(App& app, uint32_t now) {
+    if (cardBlocks(app)) {
+        go(app, Page::card);
+        return;
+    }
     if (app.page != Page::scan) {
         app.scanOrigin = app.page;
         app.scanOriginFocus = app.focus;
@@ -1010,8 +1387,13 @@ void leaveScan(App& app) {
 }
 
 void startCapture(App& app, const session::Profile& profile, uint32_t now) {
+    if (cardBlocks(app)) {
+        go(app, Page::card);
+        return;
+    }
     // A non-Beacon choice cannot start until the board confirms its mode list, as the hidden Start
-    // button on the list already shows. The Right gesture reaches here too, so gate it here as well.
+    // button on the list already shows. The Right gesture reaches here too, so gate it here as
+    // well.
     if (app.captureMode != flipper::beaconModeIndex && app.client.modesPending()) {
         return;
     }
@@ -1082,6 +1464,17 @@ void perform(App& app, const Binding& binding) {
         break;
     case Action::board:
         go(app, Page::board);
+        break;
+    case Action::testBoard:
+        app.client.runSelfTest();
+        go(app, Page::testBoard);
+        break;
+    case Action::flashBoard:
+        startFlashFlow(app);
+        break;
+    case Action::flashConfirm:
+        beginFlash(app);
+        paint(app);
         break;
     case Action::status:
         go(app, Page::status);
@@ -1227,6 +1620,18 @@ bool back(void* context) {
     case Page::point:
         go(app, Page::points, app.point);
         break;
+    case Page::testBoard:
+        go(app, Page::home, testBoardItem);
+        break;
+    case Page::card:
+        go(app, Page::home);
+        break;
+    case Page::flash:
+        if (app.flashing) {
+            return true; // A flash in progress must not be interrupted.
+        }
+        go(app, Page::home, flashBoardItem);
+        break;
     case Page::address:
         go(app, app.editOrigin, app.editOrigin == Page::points ? app.point : 0);
         break;
@@ -1337,7 +1742,9 @@ void updateRun(App& app, bool wasBusy) {
 
 void tick(void* context) {
     auto& app = *static_cast<App*>(context);
-    if (app.serial != nullptr) {
+    // While a flash runs, the ROM loader owns the UART and the receive queue; the status poll
+    // resumes once the flash finishes.
+    if (app.serial != nullptr && !app.flashing) {
         // Count the bytes before reading the clock, so no byte to handle is newer than now.
         const uint32_t count = furi_message_queue_get_count(app.rx);
         const uint32_t now = furi_get_tick();
@@ -1389,6 +1796,7 @@ void tick(void* context) {
             app.held = {};
         }
     }
+    pollFlash(app);
     paint(app);
 }
 

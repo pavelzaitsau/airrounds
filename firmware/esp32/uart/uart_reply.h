@@ -37,7 +37,42 @@ enum class VisitInterruption { unknown, no, yes };
 constexpr uint8_t sessionJournalFeature = 0x04;
 constexpr uint8_t roundDetailFeature = 0x10;
 constexpr uint8_t captureModeFeature = 0x20; // Bit 5: the board lists capture modes and runs R5.
+constexpr uint8_t selfTestFeature =
+    0x40; // Bit 6: the board runs a self-test and reports card state.
 constexpr size_t wireReplyCapacity = 240;
+
+// One self-test check result, one wire character each: pass, fail, blocked, or not run.
+enum class CheckResult { pass, fail, blocked, not_run };
+
+inline char checkChar(CheckResult result) {
+    static constexpr char chars[] = "pfb-";
+    return chars[static_cast<size_t>(result)];
+}
+
+inline bool readCheck(char character, CheckResult& result) {
+    static constexpr char chars[] = "pfb-";
+    for (size_t index = 0; index < sizeof(chars) - 1; ++index) {
+        if (chars[index] == character) {
+            result = static_cast<CheckResult>(index);
+            return true;
+        }
+    }
+    return false;
+}
+
+// The four self-test checks, in order. A check a failed prerequisite blocks reports `blocked`.
+struct SelfTest {
+    SelfTest() = default;
+    // The four checks share a type; the field order is the wire order.
+    SelfTest(CheckResult sdResult, CheckResult radioResult, CheckResult probeResult,
+             CheckResult writeResult)
+        : sd(sdResult), radio(radioResult), probe(probeResult), write(writeResult) {}
+
+    CheckResult sd = CheckResult::not_run;
+    CheckResult radio = CheckResult::not_run;
+    CheckResult probe = CheckResult::not_run;
+    CheckResult write = CheckResult::not_run;
+};
 
 inline const char* wireName(Code code) {
     static constexpr const char* names[]{"ok",
@@ -64,8 +99,8 @@ inline const char* wireName(State state) {
 }
 
 inline const char* wireName(Outcome outcome) {
-    static constexpr const char* names[]{"none",        "not_observed",     "saved",
-                                         "radio_error", "storage_error",    "absence_confirmed"};
+    static constexpr const char* names[]{"none",        "not_observed",  "saved",
+                                         "radio_error", "storage_error", "absence_confirmed"};
     static_assert(sizeof(names) / sizeof(names[0]) ==
                       static_cast<size_t>(Outcome::absence_confirmed) + 1,
                   "every outcome needs a wire name");
@@ -136,6 +171,10 @@ struct Reply {
     bool hasModes = false;
     uint8_t modeCount = 0;
     uint8_t modeIds[8]{}; // The board's listed capture-mode wire IDs, from a modes reply.
+    bool hasCard = false;
+    bool card = false; // The microSD mount state from a card reply: true when mounted.
+    bool hasSelfTest = false;
+    SelfTest selfTest;
 };
 
 inline bool readFirmware(Fields& fields, Reply& reply) {
@@ -158,8 +197,8 @@ inline bool readFirmware(Fields& fields, Reply& reply) {
 inline bool readRound(Fields& fields, RoundStatus& round, bool allowAbsence = false) {
     // Only a round_status_mode reply (which carries the mode marker) may report result digit 5;
     // every other reply keeps the digit-4 ceiling.
-    const uint64_t ceiling = static_cast<uint64_t>(allowAbsence ? Outcome::absence_confirmed
-                                                                : Outcome::storage_error);
+    const uint64_t ceiling =
+        static_cast<uint64_t>(allowAbsence ? Outcome::absence_confirmed : Outcome::storage_error);
     for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
          ++index) {
         const auto entry = fields.take();
@@ -227,6 +266,32 @@ inline bool readModes(Fields& fields, Reply& reply) {
     return fields.atEnd();
 }
 
+// A card reply appends `card <0|1>`; a selftest reply appends `selftest <4 chars>`. Both need
+// feature bit 6, and neither carries round fields.
+inline bool readCard(Fields& fields, Reply& reply) {
+    uint64_t state = 0;
+    if ((reply.features & selfTestFeature) == 0 || !fields.take().hex(1, state) || state > 1 ||
+        !fields.atEnd()) {
+        return false;
+    }
+    reply.card = state == 1;
+    reply.hasCard = true;
+    return true;
+}
+
+inline bool readSelfTest(Fields& fields, Reply& reply) {
+    const auto value = fields.take();
+    if ((reply.features & selfTestFeature) == 0 || value.size != 4 || !fields.atEnd() ||
+        !readCheck(value.data[0], reply.selfTest.sd) ||
+        !readCheck(value.data[1], reply.selfTest.radio) ||
+        !readCheck(value.data[2], reply.selfTest.probe) ||
+        !readCheck(value.data[3], reply.selfTest.write)) {
+        return false;
+    }
+    reply.hasSelfTest = true;
+    return true;
+}
+
 inline bool readReplyDetails(Fields& fields, Reply& reply) {
     if (fields.atEnd()) {
         return true;
@@ -241,6 +306,12 @@ inline bool readReplyDetails(Fields& fields, Reply& reply) {
     }
     if (marker.is("modes")) {
         return readModes(fields, reply);
+    }
+    if (marker.is("card")) {
+        return readCard(fields, reply);
+    }
+    if (marker.is("selftest")) {
+        return readSelfTest(fields, reply);
     }
     if (marker.is("journal")) {
         if ((reply.features & sessionJournalFeature) == 0 ||

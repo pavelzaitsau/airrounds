@@ -1,0 +1,70 @@
+name: release
+
+# Build the host gate and the embedded images on Linux, then publish the Flipper .fap, the merged
+# passive ESP32-S2 image, and the manifest to a GitHub release on a v* tag. A pull request to main
+# and a manual run build and package the artifacts without publishing, so the pipeline runs as PR
+# CI and can be exercised off a tag.
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host-gate tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck tcpdump
+          # llvm.sh installs clang and the analyzer but not clang-format or clang-tidy, so add them
+          # explicitly. The gate was tuned on 23.1.6; apt.llvm.org ships the current 23.1.x patch.
+          # Pin the same patch release when it offers a choice, or the diagnostics can differ. See
+          # docs/quality.md.
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 23
+          sudo apt-get install -y clang-format-23 clang-tidy-23
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Point the gate at LLVM 23
+        run: |
+          # The system clang-format and clang-tidy are the Ubuntu defaults (v18), which format and
+          # diagnose differently. Override the gate's tool names so check.py uses the v23 binaries.
+          echo "LLVM_BIN=/usr/lib/llvm-23/bin" >> "$GITHUB_ENV"
+          echo "CXX=clang++-23" >> "$GITHUB_ENV"
+          echo "CLANG_FORMAT=clang-format-23" >> "$GITHUB_ENV"
+          echo "CLANG_TIDY=clang-tidy-23" >> "$GITHUB_ENV"
+
+      - name: Provision the embedded toolchain
+        run: tools/ci/setup-toolchain.sh "$PWD"
+
+      - name: Host quality gate
+        run: make check
+
+      - name: Build the embedded images
+        run: make embedded
+
+      - name: Package the release
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: tools/ci/package-release.py
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/quality/flipper/airrounds.fap
+            artifacts/release/airrounds.bin
+            artifacts/release/airrounds.manifest

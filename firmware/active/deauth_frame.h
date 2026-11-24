@@ -29,9 +29,9 @@ inline size_t buildDeauthFrame(uint8_t* out, size_t capacity, const uint8_t clie
     out[0] = 0xC0; // Management frame, subtype 12: deauthentication.
     out[1] = 0x00; // A management frame has the ToDS and FromDS bits clear.
     // out[2..3]: the duration stays 0.
-    memcpy(out + 4, client, 6);  // Address 1: the destination, the target client.
-    memcpy(out + 10, bssid, 6);  // Address 2: the source, the access point.
-    memcpy(out + 16, bssid, 6);  // Address 3: the BSSID.
+    memcpy(out + 4, client, 6); // Address 1: the destination, the target client.
+    memcpy(out + 10, bssid, 6); // Address 2: the source, the access point.
+    memcpy(out + 16, bssid, 6); // Address 3: the BSSID.
     // out[22..23]: the sequence control stays 0; the radio sets it.
     out[24] = static_cast<uint8_t>(reasonCode & 0xFFU); // Reason code, little-endian.
     out[25] = static_cast<uint8_t>((reasonCode >> 8U) & 0xFFU);

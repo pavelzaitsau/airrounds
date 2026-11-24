@@ -156,9 +156,15 @@ def main():
     shutil.copy2(application / "dist/airrounds.fap", destination)
     # Match the pinned ARM GCC 12.3 SDK and newlib's printf attribute macro.
     # CMSIS uses linker-defined table boundaries that Cppcheck sees as objects.
+    # fbt bakes fap_version into the compile command as a quoted string define; some Cppcheck
+    # releases drop it from the project database, which trips the app's FAP_VERSION guard, so pass
+    # it explicitly from the one source of truth.
+    fap_version = re.search(r'fap_version="([^"]+)"',
+                            (application / "application.fam").read_text()).group(1)
     run([tool("cppcheck"), *cppcheck_flags,
          f"--project={application / '.vscode/compile_commands.json'}",
          "-D__GNUC__=12", "-D__GNUC_MINOR__=3", "-D_ATTRIBUTE(x)=__attribute__(x)",
+         f'-DFAP_VERSION="{fap_version}"',
          f"--suppress=missingInclude:{FLIPPER / 'ufbt/current/sdk_headers'}/*",
          f"--suppress=comparePointers:{FLIPPER / 'ufbt/current/sdk_headers/f7_sdk/lib/cmsis_core/cmsis_gcc.h'}"],
         environment)

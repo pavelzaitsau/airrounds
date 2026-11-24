@@ -13,14 +13,15 @@ namespace airrounds {
 namespace active {
 
 // The active capture mode (wire ID 02), in the opt-in active build only. It transmits a bounded
-// deauthentication burst at one client of the target access point, then captures the EAPOL handshake
-// the rejoin produces. It composes the passive EapolMode for the capture and the frame-type contract,
-// and adds the target discovery and the burst. See docs/capture-modes-design.md, "Active EAPOL mode".
+// deauthentication burst at one client of the target access point, then captures the EAPOL
+// handshake the rejoin produces. It composes the passive EapolMode for the capture and the
+// frame-type contract, and adds the target discovery and the burst. See
+// docs/capture-modes-design.md, "Active EAPOL mode".
 //
 // onFrame runs in the Wi-Fi receive callback under the visit's receive lock; poll runs on the UART
-// task with no lock. The two share only the latched target and the handshake flag, published through
-// std::atomic, so poll never reads a half-written client address and transmit never runs under the
-// lock. The target client is latched once and never mutated after its flag is set.
+// task with no lock. The two share only the latched target and the handshake flag, published
+// through std::atomic, so poll never reads a half-written client address and transmit never runs
+// under the lock. The target client is latched once and never mutated after its flag is set.
 class ActiveEapolMode final : public session::CaptureMode {
 public:
     static constexpr uint8_t burstFrames = 3;          // Deauthentication frames per burst.
@@ -61,9 +62,9 @@ public:
 
     session::ModeResult finish() override { return eapol_.finish(); }
 
-    // On the UART task, no lock. Sends the bounded deauthentication burst at the latched client, but
-    // never once a handshake is captured (capture-before-transmit and auto-stop both ride this check)
-    // and never beyond the burst count. transmit is capped by the shared round budget.
+    // On the UART task, no lock. Sends the bounded deauthentication burst at the latched client,
+    // but never once a handshake is captured (capture-before-transmit and auto-stop both ride this
+    // check) and never beyond the burst count. transmit is capped by the shared round budget.
     void poll(uint64_t nowUs, session::ModeContext& context) override {
         if (!targetReady_.load(std::memory_order_acquire) ||
             handshakeSeen_.load(std::memory_order_acquire) || burstsSent_ >= maxBursts) {
@@ -77,8 +78,8 @@ public:
             return; // Pace the frames within a burst.
         }
         uint8_t frame[deauthFrameSize];
-        const size_t len =
-            buildDeauthFrame(frame, sizeof(frame), targetClient_, target_.bssid, deauthReasonClass3);
+        const size_t len = buildDeauthFrame(frame, sizeof(frame), targetClient_, target_.bssid,
+                                            deauthReasonClass3);
         if (len == 0) {
             return;
         }
@@ -101,11 +102,13 @@ public:
     const uint8_t* targetClient() const { return targetClient_; }
 
     // The journal transmit audit (overrides CaptureMode). The reason and the target describe a
-    // transmit, so they report nothing until a frame has gone out. A visit that latched a client but
-    // captured the handshake before transmitting records no client and no reason.
+    // transmit, so they report nothing until a frame has gone out. A visit that latched a client
+    // but captured the handshake before transmitting records no client and no reason.
     uint32_t transmittedFrames() const override { return sentFrames_; }
     uint16_t transmitReason() const override { return sentFrames_ > 0 ? deauthReasonClass3 : 0; }
-    const uint8_t* transmitTarget() const override { return sentFrames_ > 0 ? targetClient_ : nullptr; }
+    const uint8_t* transmitTarget() const override {
+        return sentFrames_ > 0 ? targetClient_ : nullptr;
+    }
 
 private:
     void resetActive() {
@@ -119,10 +122,10 @@ private:
         sentFrames_ = 0;
     }
 
-    // Latch the target from an uplink data frame for the target access point: ToDS set, FromDS clear,
-    // so Address 1 is the BSSID and Address 2 is the transmitter, the client. A transmitter address
-    // is individual, so the target is never a group address; reject a group, the BSSID itself, or a
-    // zero address as a further guard.
+    // Latch the target from an uplink data frame for the target access point: ToDS set, FromDS
+    // clear, so Address 1 is the BSSID and Address 2 is the transmitter, the client. A transmitter
+    // address is individual, so the target is never a group address; reject a group, the BSSID
+    // itself, or a zero address as a further guard.
     void learnClient(const uint8_t* frame, size_t size, uint8_t channel) {
         if (frame == nullptr || size < session::eapolBaseHeaderLen || channel != target_.channel) {
             return;

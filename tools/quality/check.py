@@ -320,8 +320,19 @@ def cppcheck():
     for platform, defines in (("native", []), ("unix32", ["-DARDUINO_ARCH_ESP32"])):
         run([tool("cppcheck"), "--std=c++11", f"--platform={platform}",
              "--enable=warning,style,performance,portability,missingInclude", "--error-exitcode=1",
-             "--inline-suppr", "--suppress=missingIncludeSystem", "--library=posix",
-             *defines, *INCLUDES, *SOURCES])
+             "--inline-suppr", "--suppress=missingIncludeSystem",
+             # The host tests run their asserts (they undefine NDEBUG), so an assert on a
+             # side-effecting call is deliberate, and an assert on a constant input is the check.
+             "--suppress=assertWithSideEffect", "--suppress=knownConditionTrueFalse",
+             # Cppcheck findings vary by release; the gate was tuned on 2.22.0. An older runner adds
+             # false positives the tuned release does not: a non-reentrant readdir in a
+             # single-threaded test directory scan, and a container bound and a descriptor leak it
+             # cannot track through a test's file-descriptor reuse. unmatchedSuppression keeps these
+             # harmless on 2.22.0, where the findings do not fire.
+             "--suppress=unmatchedSuppression", "--suppress=readdirCalled",
+             "--suppress=containerOutOfBounds:*/tests/storage/pcap_capture_test.cpp",
+             "--suppress=resourceLeak:*/tests/storage/sd_writer_test.cpp",
+             "--library=posix", *defines, *INCLUDES, *SOURCES])
 
 
 def analyze():

@@ -78,6 +78,11 @@ public:
     virtual bool journalPending() const { return false; }
     virtual bool supportsJournal() const { return false; }
     virtual JournalState journalState() const { return JournalState::none; }
+    // Board self-test and microSD status (feature bit 6). A backend without an override advertises
+    // no bit 6, so the protocol answers card and selftest with bad_request.
+    virtual bool supportsSelfTest() const { return false; }
+    virtual bool cardMounted() { return false; }
+    virtual SelfTest runSelfTest() { return {}; }
 };
 
 class PassiveRound {
@@ -149,6 +154,9 @@ public:
     const RoundStatus& status() const { return status_; }
     bool supportsJournal() const { return visit_.supportsJournal(); }
     JournalState journalState() const { return visit_.journalState(); }
+    bool supportsSelfTest() const { return visit_.supportsSelfTest(); }
+    bool cardMounted() { return visit_.cardMounted(); }
+    SelfTest runSelfTest() { return visit_.runSelfTest(); }
 
 private:
     // The point's budget per mode: Beacon allows up to 7 s of listening plus radio setup and
@@ -171,7 +179,12 @@ private:
         preparing_ = false;
         if (stopRequested_) {
             finish(State::stopped, Outcome::not_observed);
-        } else if (budget_.remainingAt(visit_.nowUs()) == 0) {
+        } else if (budget_.remainingAt(visit_.nowUs()) == 0 ||
+                   (visit_.supportsSelfTest() && !visit_.cardMounted())) {
+            // The deadline passed, or the microSD preflight found no card. A card-capable board
+            // checks the mount before it opens the radio, so a card-less round reports
+            // storage_error up front, not after it saves nothing; a board without the probe keeps
+            // the old behaviour.
             fail(Outcome::storage_error);
         } else {
             startCurrent();

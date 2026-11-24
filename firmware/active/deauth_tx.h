@@ -11,8 +11,10 @@
 // lets the active build send the targeted deauthentication frame. This symbol exists only in the
 // opt-in active build, in firmware/active, so the default build is unaffected. The ESP-IDF defines
 // the same symbol non-weak in libnet80211.a, so the link needs -Wl,-zmuldefs for this override to
-// win; tools/quality/embedded.py sets that flag for the active build only. See docs/t12-architecture.md.
-extern "C" int ieee80211_raw_frame_sanity_check(int32_t /*arg*/, int32_t /*arg2*/, int32_t /*arg3*/) {
+// win; tools/quality/embedded.py sets that flag for the active build only. See
+// docs/t12-architecture.md.
+extern "C" int ieee80211_raw_frame_sanity_check(int32_t /*arg*/, int32_t /*arg2*/,
+                                                int32_t /*arg3*/) {
     return 0;
 }
 
@@ -27,8 +29,8 @@ namespace active {
 class DeauthTransmitter final : public session::Transmitter {
 public:
     bool send(const uint8_t* frame, size_t len) override {
-        // en_sys_seq true: the radio assigns an incrementing sequence number to each frame. The built
-        // frame leaves the sequence field zero, so without this the burst frames would share
+        // en_sys_seq true: the radio assigns an incrementing sequence number to each frame. The
+        // built frame leaves the sequence field zero, so without this the burst frames would share
         // sequence 0 and a client could discard the repeats as duplicates (802.11 duplicate
         // detection keys on address and sequence).
         return esp_wifi_80211_tx(WIFI_IF_STA, frame, len, true) == ESP_OK;

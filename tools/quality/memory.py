@@ -15,6 +15,18 @@ FLIPPER_OWN_STACK_SHARE = 2
 # names its possible targets; an unlisted site fails the check.
 FLIPPER_INDIRECT_TARGETS = {
     "SessionClient::sendFrame": ("App::send",),
+    # The flasher reaches the UART, the boot GPIO, the card image, and the progress callback through
+    # the injected FlasherIo and Progress pointers. On the Flipper every one is the app's own wiring.
+    "EspFlasher::report": ("flashProgress",),
+    "EspFlasher::slipWrite": ("flashWrite",),
+    "EspFlasher::slipRead": ("flashReadByte",),
+    "EspFlasher::readResponse": ("flashReadByte",),
+    "EspFlasher::command": ("flashWrite",),
+    "EspFlasher::writeBlocks": ("flashReadImage",),
+    "EspFlasher::enter": ("flashBoot",),
+    "EspFlasher::reset": ("flashBoot",),
+    "EspFlasher::flash": ("flashBoot",),
+    "flashWorker": ("flashBoot",),
 }
 
 # airrounds_uart globals and static buffers, in bytes of ESP32-S2 data RAM.

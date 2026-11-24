@@ -40,7 +40,7 @@ line feed. Replies to the original commands still fit in 127 bytes. Drop a reply
 | `code` | Result of the command. |
 | `state`, `result` | Current session state and overall result. |
 | `last_mutation` | Sixteen hex digits. The highest mutation request ID processed in this boot. |
-| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. Bit 2 supports the session journal status. Bit 3 supports scanning and five-point rounds. Bit 4 supports round interruption details. Bit 5 supports capture modes. |
+| `features` | Two hex digits. Bit 0 supports one passive visit. Bit 1 supports the round commands. Bit 2 supports the session journal status. Bit 3 supports scanning and five-point rounds. Bit 4 supports round interruption details. Bit 5 supports capture modes. Bit 6 supports the board self-test and microSD status. |
 
 Use lowercase hex throughout. In a `hello` reply, the board sends its own
 version and boot ID. Other replies echo both fields from the request.
@@ -300,3 +300,23 @@ only, because `round` and `round_stop` replies carry the older encoding.
 A rejected reply, any non-`ok` code, carries no round fields: it ends at the
 feature byte. The longest `round_status_mode` reply then fits the 240-byte
 reply buffer.
+
+## Board self-test and microSD status
+
+The board exposes a self-test and a microSD probe behind feature bit 6. A board
+without bit 6 answers both commands with `bad_request`. The client reads the
+card before it starts a capture, and runs the self-test from the Test board
+screen. Both commands run outside a round: a running round or a scan answers
+`busy`.
+
+| Item | Rule |
+| --- | --- |
+| Feature bit 6 (`40`) | The board runs a self-test and reports the microSD mount state. |
+| `card` | Read command, scope zero, no arguments. The OK reply appends `card <state>`: `1` when the microSD card is mounted, `0` when it is absent or unmountable. The probe does not write to the card. |
+| `selftest` | Read command, scope zero, no arguments. The board runs four checks and the OK reply appends `selftest <sd><radio><probe><write>`, one character each: `p` pass, `f` fail, `b` blocked, `-` not run. |
+
+The four self-test checks run in order: a microSD mount, a radio init, a short
+receive probe, and a test PCAP write that the board reads back and then removes.
+A failed check blocks the checks that depend on it: a failed microSD mount
+reports the test PCAP write as `b`, and a failed radio init reports the receive
+probe as `b`. The self-test transmits nothing and leaves no capture on the card.

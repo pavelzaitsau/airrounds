@@ -34,6 +34,7 @@ public:
         const uint64_t replyBoot = hello ? boot_ : request.key.boot;
         const auto advertised =
             features | (round_.supportsJournal() ? sessionJournalFeature : 0U) |
+            (round_.supportsSelfTest() ? selfTestFeature : 0U) |
             (scan_ != nullptr ? scanFeature | roundDetailFeature | captureModeFeature : 0U);
         const int count = snprintf(reply, sizeof(reply),
                                    "!%02x %016" PRIx64 " %016" PRIx64 " %08" PRIx64 " %s %08" PRIx32
@@ -52,6 +53,12 @@ public:
             return false;
         }
         if (code == Code::ok && verb.is("modes") && !appendModes(reply, used)) {
+            return false;
+        }
+        if (code == Code::ok && verb.is("card") && !appendCard(reply, used)) {
+            return false;
+        }
+        if (code == Code::ok && verb.is("selftest") && !appendSelfTest(reply, used)) {
             return false;
         }
         return finishReply(reply, used, verb, code);
@@ -125,15 +132,39 @@ private:
     // the active mode (02); the default build never does, so it stays provably receive-only.
     static bool appendModes(char (&reply)[replyCapacity], size_t& used) {
 #ifdef AIRROUNDS_ACTIVE
-        const int count = snprintf(reply + used, sizeof(reply) - used, " modes 03 %02x %02x %02x",
-                                   static_cast<unsigned>(beaconModeId),
-                                   static_cast<unsigned>(eapolModeId),
-                                   static_cast<unsigned>(activeModeId));
+        const int count =
+            snprintf(reply + used, sizeof(reply) - used, " modes 03 %02x %02x %02x",
+                     static_cast<unsigned>(beaconModeId), static_cast<unsigned>(eapolModeId),
+                     static_cast<unsigned>(activeModeId));
 #else
-        const int count = snprintf(reply + used, sizeof(reply) - used, " modes 02 %02x %02x",
-                                   static_cast<unsigned>(beaconModeId),
-                                   static_cast<unsigned>(eapolModeId));
+        const int count =
+            snprintf(reply + used, sizeof(reply) - used, " modes 02 %02x %02x",
+                     static_cast<unsigned>(beaconModeId), static_cast<unsigned>(eapolModeId));
 #endif
+        if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
+            return false;
+        }
+        used += static_cast<size_t>(count);
+        return true;
+    }
+
+    // card reports the microSD mount state; selftest runs the four board checks. Both run outside a
+    // round, so a running round or a scan answers busy, and runSelfTest executes here.
+    bool appendCard(char (&reply)[replyCapacity], size_t& used) {
+        const int count = snprintf(reply + used, sizeof(reply) - used, " card %u",
+                                   round_.cardMounted() ? 1U : 0U);
+        if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
+            return false;
+        }
+        used += static_cast<size_t>(count);
+        return true;
+    }
+
+    bool appendSelfTest(char (&reply)[replyCapacity], size_t& used) {
+        const SelfTest result = round_.runSelfTest();
+        const int count =
+            snprintf(reply + used, sizeof(reply) - used, " selftest %c%c%c%c", checkChar(result.sd),
+                     checkChar(result.radio), checkChar(result.probe), checkChar(result.write));
         if (count <= 0 || static_cast<size_t>(count) >= sizeof(reply) - used) {
             return false;
         }
@@ -217,10 +248,10 @@ private:
         const auto& status = round_.status();
         for (size_t index = 0; index < status.profile.size(); ++index) {
             const auto& target = status.profile[index];
-            const int count = snprintf(reply + used, sizeof(reply) - used, " %012" PRIx64 "%02x%x",
-                                       session::addressValue(target),
-                                       static_cast<unsigned>(target.channel),
-                                       static_cast<unsigned>(status.results[index]));
+            const int count =
+                snprintf(reply + used, sizeof(reply) - used, " %012" PRIx64 "%02x%x",
+                         session::addressValue(target), static_cast<unsigned>(target.channel),
+                         static_cast<unsigned>(status.results[index]));
             if (count != 16 || static_cast<size_t>(count) >= sizeof(reply) - used) {
                 return false;
             }
@@ -287,6 +318,17 @@ private:
         if ((verb.is("firmware") || modesListQuery(verb)) && fields.atEnd()) {
             return scope == 0 ? Code::ok : Code::unknown_session;
         }
+        if ((verb.is("card") || verb.is("selftest")) && round_.supportsSelfTest() &&
+            fields.atEnd()) {
+            if (scope != 0) {
+                return Code::unknown_session;
+            }
+            if (scanning() || round_.state() == State::running ||
+                round_.state() == State::finalizing) {
+                return Code::busy;
+            }
+            return Code::ok;
+        }
         if (verb.is("scan_read")) {
             return readScan(scope, fields, scanIndex);
         }
@@ -346,6 +388,11 @@ private:
     }
 
     Code cancelScan() {
+        // cancelScan runs only on the scan_stop path, which a board without a scan rejects earlier;
+        // the guard states that invariant for the analyzer and never fires in practice.
+        if (scan_ == nullptr) {
+            return Code::bad_request;
+        }
         if (scanning()) {
             scan_->stopScan();
         }
@@ -363,7 +410,8 @@ private:
             // tested before the limit, so a full profile can still carry it.
             if (multiple && scan_ != nullptr && field.is("mode")) {
                 uint64_t id = 0;
-                // A round needs at least one access point; a mode tail with no point is bad grammar.
+                // A round needs at least one access point; a mode tail with no point is bad
+                // grammar.
                 if (profile.size() == 0 || !fields.take().hex(2, id) || !fields.atEnd() ||
                     !knownMode(static_cast<uint8_t>(id))) {
                     return Code::bad_request;

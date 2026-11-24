@@ -57,26 +57,26 @@ namespace detail {
 inline size_t formatSessionJournal(char* text, size_t capacity, const SessionReport& report,
                                    const VisitStatistics* stats, JournalBuild build) {
     const auto count = report.status.profile.size();
-    const int header = snprintf(
-        text, capacity,
+    const int header =
+        snprintf(text, capacity,
 #ifdef AIRROUNDS_ACTIVE
-        "format=airrounds-session-v4\n"
+                 "format=airrounds-session-v4\n"
 #else
-        "format=airrounds-session-v3\n"
+                 "format=airrounds-session-v3\n"
 #endif
-        "firmware=%s build=%s revision=%s protocol=%02x radio="
+                 "firmware=%s build=%s revision=%s protocol=%02x radio="
 #ifdef AIRROUNDS_ACTIVE
-        "active"
+                 "active"
 #else
-        "passive"
+                 "passive"
 #endif
-        " mode=%s\n"
-        "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
-        "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
-        firmwareVersion, build.id, build.revision, static_cast<unsigned>(version),
-        journalModeName(report.status.mode), report.id.boot, report.id.session,
-        wireName(report.state), wireName(report.outcome), count, report.budget.startedUs,
-        report.endedUs, report.budget.durationUs);
+                 " mode=%s\n"
+                 "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
+                 "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
+                 firmwareVersion, build.id, build.revision, static_cast<unsigned>(version),
+                 journalModeName(report.status.mode), report.id.boot, report.id.session,
+                 wireName(report.state), wireName(report.outcome), count, report.budget.startedUs,
+                 report.endedUs, report.budget.durationUs);
     if (header <= 0 || static_cast<size_t>(header) >= capacity) {
         return 0;
     }
@@ -102,8 +102,8 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
             " bytes_written=%" PRIu64 " verified_file_size=%zu pcap=%s\n",
             index + 1, session::addressValue(target), static_cast<unsigned>(target.channel),
             wireName(result), point.listenStartedUs, point.listenEndedUs, point.observedFrames,
-            point.acceptedFrames, point.observedFrames - point.acceptedFrames,
-            point.queueOverflows, point.bytesWritten, point.verifiedFileSize, filename);
+            point.acceptedFrames, point.observedFrames - point.acceptedFrames, point.queueOverflows,
+            point.bytesWritten, point.verifiedFileSize, filename);
         if (line <= 0 || static_cast<size_t>(line) >= capacity - used) {
             return 0;
         }
@@ -115,8 +115,8 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
         }
         const int audit =
             snprintf(text + used, capacity - used,
-                     "tx point=%zu frames=%" PRIu32 " reason=%u client=%012" PRIx64 "\n",
-                     index + 1, point.txFrames, static_cast<unsigned>(point.txReason), client);
+                     "tx point=%zu frames=%" PRIu32 " reason=%u client=%012" PRIx64 "\n", index + 1,
+                     point.txFrames, static_cast<unsigned>(point.txReason), client);
         if (audit <= 0 || static_cast<size_t>(audit) >= capacity - used) {
             return 0;
         }

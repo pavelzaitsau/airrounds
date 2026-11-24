@@ -63,14 +63,15 @@ std::array<uint8_t, 47> withSsid(char first) {
 // A constructor with defaults, not default member initializers: a C++11 aggregate may have
 // neither, and the tests brace-initialize this with zero to seven fields.
 struct EapolParams {
-    uint8_t fc0;          // Data frame subtype.
-    uint8_t fc1;          // DS bits, Order, Protected.
+    uint8_t fc0; // Data frame subtype.
+    uint8_t fc1; // DS bits, Order, Protected.
     uint8_t ethertypeHigh;
     uint8_t ethertypeLow;
-    uint8_t packetType;   // 3 is EAPOL-Key.
-    uint16_t keyInfo;     // Message 1 default: Key Type and Key ACK.
-    size_t keyDataLen;    // Extra key-data bytes beyond the 95 fixed EAPOL-Key fields.
+    uint8_t packetType; // 3 is EAPOL-Key.
+    uint16_t keyInfo;   // Message 1 default: Key Type and Key ACK.
+    size_t keyDataLen;  // Extra key-data bytes beyond the 95 fixed EAPOL-Key fields.
 
+    // cppcheck-suppress noExplicitConstructor  // A test factory, called with named fields.
     EapolParams(uint8_t frameControl0 = 0x08, uint8_t frameControl1 = 0x00,
                 uint8_t ethertype0 = 0x88, uint8_t ethertype1 = 0x8e, uint8_t packet = 3,
                 uint16_t info = 0x0088, size_t keyData = 0)
@@ -94,18 +95,18 @@ std::vector<uint8_t> eapolFrame(const EapolParams& params) {
         frame[10 + index] = static_cast<uint8_t>(0xb0 + index); // Addr2
         frame[16 + index] = static_cast<uint8_t>(0xc0 + index); // Addr3
     }
-    const uint8_t llcSnap[8] = {0xAA, 0xAA, 0x03, 0x00, 0x00,
-                                0x00, params.ethertypeHigh, params.ethertypeLow};
+    const uint8_t llcSnap[8] = {
+        0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, params.ethertypeHigh, params.ethertypeLow};
     frame.insert(frame.end(), std::begin(llcSnap), std::end(llcSnap));
     const size_t keyFrameLen = 95 + params.keyDataLen; // Fixed EAPOL-Key fields plus key data.
-    frame.push_back(2);                                            // EAPOL version.
-    frame.push_back(params.packetType);                           // EAPOL packet type.
-    frame.push_back(static_cast<uint8_t>(keyFrameLen >> 8U));     // Body length, big-endian.
+    frame.push_back(2);                                // EAPOL version.
+    frame.push_back(params.packetType);                // EAPOL packet type.
+    frame.push_back(static_cast<uint8_t>(keyFrameLen >> 8U)); // Body length, big-endian.
     frame.push_back(static_cast<uint8_t>(keyFrameLen & 0xffU));
     const size_t bodyStart = frame.size();
     frame.resize(bodyStart + keyFrameLen, 0);
-    frame[bodyStart] = 2;                                                // Descriptor type.
-    frame[bodyStart + 1] = static_cast<uint8_t>(params.keyInfo >> 8U);   // Key Information, BE.
+    frame[bodyStart] = 2;                                              // Descriptor type.
+    frame[bodyStart + 1] = static_cast<uint8_t>(params.keyInfo >> 8U); // Key Information, BE.
     frame[bodyStart + 2] = static_cast<uint8_t>(params.keyInfo & 0xffU);
     return frame;
 }
@@ -254,7 +255,7 @@ void testWriterKeepsDeclaredTypes(const std::string& directory) {
     const std::string nonEapol = directory + "/non_eapol.pcap";
     require(!storage::writePcapRecord(nonEapol.c_str(), data.data(), data.size(), 0,
                                       storage::dataFrames)
-                 .saved &&
+                    .saved &&
                 !exists(nonEapol),
             "the writer gate refuses a non-EAPOL data frame before it creates the file");
 
@@ -262,7 +263,7 @@ void testWriterKeepsDeclaredTypes(const std::string& directory) {
     const std::string encrypted = directory + "/protected.pcap";
     require(!storage::writePcapRecord(encrypted.c_str(), protectedEapol.data(),
                                       protectedEapol.size(), 0, storage::dataFrames)
-                 .saved &&
+                    .saved &&
                 !exists(encrypted),
             "the writer gate refuses a Protected data frame");
 
@@ -363,8 +364,10 @@ void testEapolParser() {
     require(classifyKeyInfo(0x0108) == 2, "MIC only is message 2");
     require(classifyKeyInfo(0x0388) == 3, "ACK, MIC, and Secure is message 3");
     require(classifyKeyInfo(0x0308) == 4, "MIC and Secure is message 4");
-    require(classifyKeyInfo(0x0080) == 0, "a group rekey message 1 with Key Type clear is no match");
-    require(classifyKeyInfo(0x0100) == 0, "a group rekey message 2 with Key Type clear is no match");
+    require(classifyKeyInfo(0x0080) == 0,
+            "a group rekey message 1 with Key Type clear is no match");
+    require(classifyKeyInfo(0x0100) == 0,
+            "a group rekey message 2 with Key Type clear is no match");
     require(classifyKeyInfo(0x0188) == 0, "a WPA1 message 3 with Secure clear is no match");
     require(classifyKeyInfo(0x0008) == 0, "the Key Type bit alone is no match");
 
@@ -385,7 +388,8 @@ void testEapolParser() {
     const auto wds = eapolFrame({0x08, 0x03, 0x88, 0x8e, 3, 0x0088, 0});
     require(eapolBssid(sameBss.data(), sameBss.size()) == sameBss.data() + 16, "same-BSS is Addr3");
     require(eapolBssid(toDs.data(), toDs.size()) == toDs.data() + 4, "client to AP is Addr1");
-    require(eapolBssid(fromDs.data(), fromDs.size()) == fromDs.data() + 10, "AP to client is Addr2");
+    require(eapolBssid(fromDs.data(), fromDs.size()) == fromDs.data() + 10,
+            "AP to client is Addr2");
     require(eapolBssid(wds.data(), wds.size()) == nullptr, "a WDS frame has no single BSSID");
     require(eapolBssid(sameBss.data(), 23) == nullptr, "a frame shorter than a header is dropped");
     require(eapolBssid(nullptr, 100) == nullptr, "a missing frame is dropped");
@@ -405,9 +409,9 @@ void testEapolParser() {
     const size_t header = eapolHeaderLen(key.data());
     require(!isEapolKeyFrame(key.data(), 23), "a frame shorter than a header is refused");
     require(!isEapolKeyFrame(key.data(), header), "a frame with no LLC/SNAP is refused");
-    require(!isEapolKeyFrame(key.data(), header + 7), "a frame with a partial ethertype is refused");
-    require(!isEapolKeyFrame(key.data(), header + 8),
-            "a frame with no EAPOL header is refused");
+    require(!isEapolKeyFrame(key.data(), header + 7),
+            "a frame with a partial ethertype is refused");
+    require(!isEapolKeyFrame(key.data(), header + 8), "a frame with no EAPOL header is refused");
     require(!isEapolKeyFrame(key.data(), header + 9),
             "a frame with no EAPOL packet type is refused");
     require(isEapolKeyFrame(key.data(), header + 10), "the shortest EAPOL-Key frame is recognised");
@@ -448,8 +452,9 @@ void testWriterEapolGate(const std::string& directory) {
     Chain beaconSet;
     beaconSet.frames.emplace_back(beacon.begin(), beacon.end());
     const std::string beaconPath = directory + "/beacon_set.pcap";
-    require(storage::writePcapRecords(beaconPath.c_str(), beaconSet, storage::managementFrames).saved,
-            "a Beacon set is unaffected by the EAPOL gate");
+    require(
+        storage::writePcapRecords(beaconPath.c_str(), beaconSet, storage::managementFrames).saved,
+        "a Beacon set is unaffected by the EAPOL gate");
 
     // A data frame with a well-formed LLC/SNAP but a non-EAPOL ethertype (IPv4 0x0800) is refused
     // by the writer gate, so a mode parser defect cannot save another data frame.
@@ -457,11 +462,13 @@ void testWriterEapolGate(const std::string& directory) {
     const std::string ipPath = directory + "/ip_data.pcap";
     require(!storage::writePcapRecord(ipPath.c_str(), ipData.data(), ipData.size(), 0,
                                       storage::dataFrames)
-                 .saved &&
+                    .saved &&
                 !exists(ipPath),
             "the writer gate refuses a data frame whose ethertype is not EAPOL");
 }
 
+// One cohesive scenario sequence; splitting it would scatter the handshake setup it shares.
+// NOLINTNEXTLINE(readability-function-size)
 void testEapolMode(const std::string& directory) {
     using session::EapolMode;
     const uint8_t bssid[6] = {2, 0, 0, 0, 0, 1};
@@ -508,7 +515,7 @@ void testEapolMode(const std::string& directory) {
 
     // Refuse the forms that are not an own-BSSID pairwise EAPOL-Key message.
     mode.reset();
-    auto patched = [&](EapolParams params) {
+    auto patched = [&](const EapolParams& params) {
         auto frame = eapolFrame(params);
         std::memcpy(frame.data() + 10, bssid, 6); // FromDS BSSID is Addr2.
         return frame;
@@ -517,8 +524,10 @@ void testEapolMode(const std::string& directory) {
     const auto wrongType = patched({0x08, 0x02, 0x88, 0x00, 3, 0x0088, 0});
     const auto groupRekey = patched({0x08, 0x02, 0x88, 0x8e, 3, 0x0080, 0});
     const auto wpa1Three = patched({0x08, 0x02, 0x88, 0x8e, 3, 0x0188, 0});
-    const auto protectedFrame = patched({0x08, 0x42, 0x88, 0x8e, 3, 0x0088, 0}); // FromDS + Protected.
-    require(!mode.onFrame(nonKey.data(), nonKey.size(), 6, 1000), "a non-Key EAPOL type is refused");
+    const auto protectedFrame =
+        patched({0x08, 0x42, 0x88, 0x8e, 3, 0x0088, 0}); // FromDS + Protected.
+    require(!mode.onFrame(nonKey.data(), nonKey.size(), 6, 1000),
+            "a non-Key EAPOL type is refused");
     require(!mode.onFrame(wrongType.data(), wrongType.size(), 6, 1000),
             "a frame without the EAPOL ethertype is refused");
     require(!mode.onFrame(groupRekey.data(), groupRekey.size(), 6, 1000),
@@ -592,7 +601,8 @@ void testEapolMode(const std::string& directory) {
 
     // With only message 1 and time still left, the visit keeps listening (no early stop).
     mode.reset();
-    require(mode.onFrame(m1.data(), m1.size(), 6, 1000), "message 1 held for the keep-listening check");
+    require(mode.onFrame(m1.data(), m1.size(), 6, 1000),
+            "message 1 held for the keep-listening check");
     require(!mode.done(2000000), "with only message 1 and budget left the visit keeps listening");
 
     // A frame cut off before the key-info bytes is dropped, not read past its end.

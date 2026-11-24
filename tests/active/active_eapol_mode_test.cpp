@@ -16,8 +16,8 @@ using airrounds::session::CaptureModeId;
 using airrounds::session::ModeContext;
 using airrounds::session::ModeResult;
 using airrounds::session::Target;
-using airrounds::session::Transmitter;
 using airrounds::session::TransmitBudget;
+using airrounds::session::Transmitter;
 
 constexpr Target target{{2, 0, 0, 0, 0, 1}, 6};
 const uint8_t bssid[6] = {2, 0, 0, 0, 0, 1};
@@ -36,10 +36,12 @@ std::vector<uint8_t> dataFrame(uint8_t fc1, const uint8_t addr1[6], const uint8_
 
 // An uplink data frame (ToDS, not EAPOL) from a client to the access point: Addr1 is the BSSID,
 // Addr2 is the client. It is how the mode learns its target.
-std::vector<uint8_t> uplink(const uint8_t transmitter[6]) { return dataFrame(0x01, bssid, transmitter); }
+std::vector<uint8_t> uplink(const uint8_t transmitter[6]) {
+    return dataFrame(0x01, bssid, transmitter);
+}
 
-// An EAPOL-Key handshake message, placed per DS direction: 1 and 3 go AP to client (FromDS), 2 and 4
-// go client to AP (ToDS). keyData appends after the 95 fixed fields.
+// An EAPOL-Key handshake message, placed per DS direction: 1 and 3 go AP to client (FromDS), 2 and
+// 4 go client to AP (ToDS). keyData appends after the 95 fixed fields.
 std::vector<uint8_t> handshake(int message, const uint8_t peer[6],
                                const std::vector<uint8_t>& keyData = {}) {
     static const uint16_t keyInfo[4] = {0x0088, 0x0108, 0x0388, 0x0308};
@@ -174,9 +176,9 @@ void testBurst() {
     const auto& first = capture.frames.front();
     assert(first.size() == airrounds::active::deauthFrameSize);
     assert(first[0] == 0xC0 && first[1] == 0x00);
-    assert(std::memcmp(first.data() + 4, client, 6) == 0);  // Address 1: the client.
-    assert(std::memcmp(first.data() + 10, bssid, 6) == 0);  // Address 2: the access point.
-    assert(first[24] == 7 && first[25] == 0);               // Reason 7, little-endian.
+    assert(std::memcmp(first.data() + 4, client, 6) == 0); // Address 1: the client.
+    assert(std::memcmp(first.data() + 10, bssid, 6) == 0); // Address 2: the access point.
+    assert(first[24] == 7 && first[25] == 0);              // Reason 7, little-endian.
 }
 
 void testCaptureBeforeTransmit() {

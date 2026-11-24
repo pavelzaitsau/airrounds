@@ -2,8 +2,7 @@
 
 AirRounds controls passive Wi-Fi sessions on the ESP32-S2 Wi-Fi Devboard.
 Scan for nearby 2.4 GHz networks and select the approved points to capture.
-Read [acceptable use](../docs/acceptable-use.md) before you build, install, or
-run the app.
+The app and its public firmware are receive-only and add no transmit path.
 
 ## Build and connect
 
@@ -32,9 +31,7 @@ screen keeps BSSIDs and channels out of the interface. The list preserves
 matching selections and outcomes during rescans while AirRounds is open.
 
 **Capture mode** chooses the mode of the next round. Beacon is always available;
-**EAPOL** and **Deauth** are available once the board lists them. Only the opt-in
-active build lists **Deauth**, so on the passive firmware it shows **Soon**. See
-[Capture modes](../docs/ui-ux/capture-modes.md). **Flash board hardware** and
+**EAPOL** is available once the board lists it. **Flash board hardware** and
 **Test board** are empty menu entries. **About** shows the app version and the
 board firmware version. An older board with scan support shows **Unknown**.
 About is part of the scan menu only, so a board without scan support never shows

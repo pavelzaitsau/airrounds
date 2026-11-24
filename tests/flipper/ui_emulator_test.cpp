@@ -57,7 +57,17 @@ public:
     Outcome saveResult() const override { return outcome; }
     bool supportsJournal() const override { return journalSupported; }
     JournalState journalState() const override { return journal; }
+    bool supportsSelfTest() const override { return selfTestSupported; }
+    bool cardMounted() override { return cardMounted_; }
+    SelfTest runSelfTest() override {
+        ++selfTests;
+        return selfTestResult;
+    }
 
+    bool selfTestSupported = false;
+    bool cardMounted_ = true;
+    SelfTest selfTestResult{};
+    unsigned selfTests = 0;
     std::vector<CaptureId> saves;
     bool journalSupported = false;
     JournalState journal = JournalState::none;
@@ -542,7 +552,7 @@ void scannedFlow() {
         tap(InputKeyDown);
         tap(InputKeyDown);
         tap(InputKeyOk);
-        screen("Flash board hardware");
+        screen("No image", "Install the release", "to apps_data/airrounds");
         tap(InputKeyBack);
         layout("Pb 4,11 AirRounds\n"
                "Sb 5,22 Scan area\n"
@@ -2027,8 +2037,7 @@ void captureModeLockedDuringRound() {
 
         // A lost link during the round hides the last known state behind the unknown one.
         board.goOffline();
-        screen("Capture mode", "* Beacon", "EAPOL", "Deauth", "Soon",
-               "Board state unknown");
+        screen("Capture mode", "* Beacon", "EAPOL", "Deauth", "Soon", "Board state unknown");
         board.comeBack();
         screen("Capture mode", "* Beacon", "EAPOL", "Deauth", "Soon", "Session active");
         tap(InputKeyBack);
@@ -3249,6 +3258,166 @@ void longBackInTheEditor() {
 
 } // namespace
 
+void testBoardSelfTest() {
+    Board board(false, true);
+    cardWith({});
+    board.receiver.selfTestSupported = true;
+    board.receiver.selfTestResult = {CheckResult::pass, CheckResult::fail, CheckResult::blocked,
+                                     CheckResult::pass};
+    emu::scenario = [&] {
+        board.advance(8);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Test board", "Testing...");
+        board.advance(10);
+        screen("Test board", "microSD", "Pass", "Radio", "Fail", "Receive", "Blocked", "Write",
+               "Pass", "OK to run again");
+        assert(board.receiver.selfTests == 1);
+        tap(InputKeyOk); // Run again.
+        screen("Test board", "Testing...");
+        board.advance(10);
+        assert(board.receiver.selfTests == 2);
+        tap(InputKeyBack);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+    };
+    runApp();
+}
+
+void testBoardUnsupported() {
+    Board board(false, true); // A scan board without feature bit 6.
+    cardWith({});
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Test board", "Not supported", "Update board firmware");
+        assert(board.receiver.selfTests == 0);
+    };
+    runApp();
+}
+
+void cardGateBlocksScan() {
+    Board board(false, true);
+    cardWith({});
+    board.receiver.selfTestSupported = true;
+    board.receiver.cardMounted_ = false; // The board reports no microSD card.
+    board.receiver.selfTestResult = {CheckResult::fail, CheckResult::pass, CheckResult::pass,
+                                     CheckResult::blocked};
+    emu::scenario = [&] {
+        board.advance(10);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyOk); // Scan area refuses without a card.
+        screen("Insert SD card", "The board needs a", "microSD card for", "Scan and Capture.");
+        tap(InputKeyBack);
+        // Test board still runs without a card.
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Test board", "Testing...");
+        board.advance(10);
+        screen("Test board", "microSD", "Fail", "Radio", "Pass", "Receive", "Pass", "Write",
+               "Blocked", "OK to run again");
+    };
+    runApp();
+}
+
+void cardWithImage(const std::string& manifestJson, uint32_t imageSize) {
+    emu::disk = Storage{};
+    const auto write = [](const char* path, const void* data, size_t size) {
+        File* file = storage_file_alloc(&emu::disk);
+        if (storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+            storage_file_write(file, static_cast<const unsigned char*>(data), size);
+        }
+        storage_file_close(file);
+        storage_file_free(file);
+    };
+    write(APP_DATA_PATH("airrounds.manifest"), manifestJson.data(), manifestJson.size());
+    const std::vector<uint8_t> image(imageSize, 0xAB);
+    write(APP_DATA_PATH("airrounds.bin"), image.data(), image.size());
+}
+
+std::string manifestJson(uint32_t size, const char* variant) {
+    // Mirror the CI manifest (tools/ci/package-release.py): pretty-printed JSON with a 64-hex
+    // sha256 ahead of the md5, so the file runs past 256 bytes. A reader whose buffer is too small
+    // truncates before md5 and rejects the image, so this doubles as the regression guard for the
+    // flasher read buffer. The revision is a 40-char SHA, as the CI writes, so the guard models the
+    // real manifest length.
+    std::string json = "{\n";
+    json += "  \"build_id\": \"unidentified\",\n";
+    json += "  \"revision\": \"" + std::string(40, '0') + "\",\n";
+    json += "  \"fap_version\": \"0.2\",\n";
+    json += "  \"firmware_version\": \"0.2\",\n";
+    json += "  \"variant\": \"" + std::string(variant) + "\",\n";
+    json += "  \"image\": {\n";
+    json += "    \"file\": \"airrounds.bin\",\n";
+    json += "    \"offset\": 0,\n";
+    json += "    \"size\": " + std::to_string(size) + ",\n";
+    json += "    \"sha256\": \"" + std::string(64, 'c') + "\",\n";
+    json += "    \"md5\": \"" + std::string(32, 'a') + "\"\n";
+    json += "  }\n}\n";
+    return json;
+}
+
+void flashMissingImage() {
+    Board board(false, true);
+    cardWith({}); // No manifest or image on the card.
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("No image", "Install the release", "to apps_data/airrounds");
+    };
+    runApp();
+}
+
+void flashPassiveImage() {
+    Board board(false, true);
+    cardWithImage(manifestJson(800, "passive"), 800);
+    emu::flashFinish = false;
+    emu::flashSucceeds = true;
+    emu::scenario = [&] {
+        board.advance(8);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Flashing...", "Entering loader", "Block 0 / 1");
+        emu::flashFinish = true;
+        board.advance();
+        screen("Board flashed", "Image verified.");
+        tap(InputKeyBack);
+        screen("AirRounds", "Scan area", "Capture mode", "Flash board hardware", "Test board", "v");
+    };
+    runApp();
+}
+
+void flashActiveNeedsAttestation() {
+    Board board(false, true);
+    cardWithImage(manifestJson(800, "active"), 800);
+    emu::flashFinish = false;
+    emu::flashSucceeds = false;
+    emu::scenario = [&] {
+        board.advance(8);
+        tap(InputKeyDown);
+        tap(InputKeyDown);
+        tap(InputKeyOk);
+        screen("Active TX image", "Transmits deauth.", "Own network only.", "OK to flash");
+        tap(InputKeyOk);
+        screen("Flashing...", "Entering loader", "Block 0 / 1");
+        emu::flashFinish = true;
+        board.advance();
+        screen("Flash failed", "No board response", "Hold BOOT, tap RESET", "OK to retry");
+    };
+    runApp();
+}
+
 int main() {
     {
         Board board;
@@ -3347,6 +3516,12 @@ int main() {
     sessionAcrossTickWrap();
     idleLineIsIgnored();
     longBackInTheEditor();
+    testBoardSelfTest();
+    testBoardUnsupported();
+    cardGateBlocksScan();
+    flashMissingImage();
+    flashPassiveImage();
+    flashActiveNeedsAttestation();
     std::cout
         << "Native UI emulator: exact screens and layouts, profile editing and storage faults, "
            "scan lists, Stop, retry, rejections, link recovery, board restarts, legacy "

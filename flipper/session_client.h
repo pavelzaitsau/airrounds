@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../firmware/esp32/session/target.h"
-#include "../firmware/esp32/uart/uart_reply.h"
+#include "shared/target.h"
+#include "shared/uart_reply.h"
 
 namespace airrounds {
 namespace flipper {

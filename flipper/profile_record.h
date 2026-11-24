@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../firmware/esp32/session/target.h"
+#include "shared/target.h"
 
 namespace airrounds {
 namespace flipper {

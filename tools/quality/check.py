@@ -300,10 +300,13 @@ def tests(mode):
 
 
 def formatting(fix=False):
+    # flipper/shared holds generated vendored headers; the drift check owns them, and clang-format
+    # would reorder their flattened includes, so leave them out of the formatting set.
     sources = sorted(path for folder in ("firmware", "flipper", "tests")
                      for path in (ROOT / folder).rglob("*")
                      if path.suffix in (".c", ".cpp", ".h", ".ino")
-                     and not {"build", "dist", ".ufbt"}.intersection(path.relative_to(ROOT).parts))
+                     and not {"build", "dist", ".ufbt"}.intersection(path.relative_to(ROOT).parts)
+                     and path.relative_to(ROOT).parts[:2] != ("flipper", "shared"))
     if not sources:
         raise SystemExit("No C/C++ sources found for formatting")
     run([tool("clang-format"), *(["-i"] if fix else ["--dry-run", "--Werror"]), *sources])
@@ -342,10 +345,16 @@ def analyze():
              source, "-o", BUILD / (source.stem + ".plist")])
 
 
+def vendored():
+    # The catalog builds flipper/ in isolation, so the shared protocol headers are vendored into
+    # flipper/shared/. Fail if that copy has drifted from the firmware source of truth.
+    run([sys.executable, ROOT / "tools/ci/vendor_flipper_shared.py", "--check"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("check", choices=("all", "format", "format-check", "test", "asan",
-                                          "tsan", "tidy", "cppcheck", "analyze"))
+                                          "tsan", "tidy", "cppcheck", "analyze", "vendored"))
     selected = parser.parse_args().check
     if not SOURCES:
         raise SystemExit("No host tests found")
@@ -356,10 +365,11 @@ def main():
     checks = {"format": lambda: formatting(True), "format-check": formatting,
               "test": lambda: tests("test"), "asan": lambda: tests("asan"),
               "tsan": lambda: tests("tsan"), "tidy": tidy,
-              "cppcheck": cppcheck, "analyze": analyze}
-    for name in (checks if selected == "all" else [selected]):
-        if selected == "all" and name == "format":
-            continue
+              "cppcheck": cppcheck, "analyze": analyze, "vendored": vendored}
+    # Run the vendored drift check first under "all": a stale flipper/shared/ would otherwise make
+    # the ui_emulator in "test" fail with a confusing redefinition instead of a clear drift message.
+    everything = ["vendored", "format-check", "test", "asan", "tsan", "tidy", "cppcheck", "analyze"]
+    for name in (everything if selected == "all" else [selected]):
         checks[name]()
 
 

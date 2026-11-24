@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_UART_REPLY_H
+#define AIRROUNDS_SHARED_UART_REPLY_H
 
 #include "../session/target.h"
 #include "scan.h"
@@ -402,3 +403,4 @@ inline bool matchesReply(const char* line, const ReplyKey& expected) {
 
 } // namespace uart
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_UART_REPLY_H

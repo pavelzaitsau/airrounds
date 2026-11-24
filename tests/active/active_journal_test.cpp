@@ -50,12 +50,13 @@ int main() {
     // A point that transmitted nothing records a zero audit, never a stale client.
     report.id.session = 8;
     report.status.results[0] = Outcome::not_observed;
-    VisitStatistics quiet[airrounds::session::Profile::capacity]{};
+    const VisitStatistics quiet[airrounds::session::Profile::capacity]{};
     const size_t quietSize =
         detail::formatSessionJournal(text, sizeof(text), report, quiet, {"build-id", "revision"});
     assert(quietSize > 0);
     const std::string quietOut(text, quietSize);
-    assert(quietOut.find("tx point=1 frames=0 reason=0 client=000000000000\n") != std::string::npos);
+    assert(quietOut.find("tx point=1 frames=0 reason=0 client=000000000000\n") !=
+           std::string::npos);
 
     // A full five-point round fits the 2304-byte journal buffer with a tx line per point.
     SessionReport five;

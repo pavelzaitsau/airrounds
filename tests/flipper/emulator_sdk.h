@@ -23,6 +23,15 @@
 #define RECORD_STORAGE "storage"
 #define RECORD_EXPANSION "expansion"
 
+// The UI emulator force-includes this header, so the app guards out the on-device flash execution
+// (the boot GPIO, a worker thread, and the ROM loader over the UART) and the test drives the
+// stubbed flash through these flags.
+#define AIRROUNDS_EMULATOR 1
+namespace emu {
+inline bool flashFinish = false;  // The test ends the stubbed flash.
+inline bool flashSucceeds = true; // ... as a verified flash or a failure.
+} // namespace emu
+
 enum InputKey { InputKeyUp, InputKeyDown, InputKeyRight, InputKeyLeft, InputKeyOk, InputKeyBack };
 enum InputType { InputTypePress, InputTypeRelease, InputTypeShort, InputTypeLong, InputTypeRepeat };
 enum { FontPrimary, FontSecondary, ColorWhite, ColorBlack, ViewModelTypeLocking };

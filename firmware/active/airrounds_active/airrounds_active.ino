@@ -10,10 +10,10 @@ using airrounds::uart::PassiveVisit;
 using airrounds::uart::Protocol;
 using airrounds::uart::randomId;
 
-// The opt-in active build. It is the passive firmware plus the one transmit path in firmware/active.
-// It injects the transmitter and the active capture mode, and opens the radio in WIFI_MODE_STA so the
-// interface exists for the deauthentication transmit. The default build does none of this and stays
-// receive-only. See docs/t12-architecture.md.
+// The opt-in active build. It is the passive firmware plus the one transmit path in
+// firmware/active. It injects the transmitter and the active capture mode, and opens the radio in
+// WIFI_MODE_STA so the interface exists for the deauthentication transmit. The default build does
+// none of this and stays receive-only. See docs/t12-architecture.md.
 void setup() {
     Serial0.begin(115200, SERIAL_8N1, RX, TX);
     static DeauthTransmitter transmitter;

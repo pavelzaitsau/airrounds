@@ -63,8 +63,8 @@ void testAvailability() {
     listed.ids[1] = 0x01;
     // EAPOL is implemented and offered only when the board lists 01.
     assert(modeAvailable(captureModes[1], listed));
-    // The active mode is implemented; the app offers it only when the board lists 02, which only the
-    // opt-in active build does. A default board does not list it, so it stays unavailable.
+    // The active mode is implemented; the app offers it only when the board lists 02, which only
+    // the opt-in active build does. A default board does not list it, so it stays unavailable.
     BoardModes listsActive;
     listsActive.count = 1;
     listsActive.ids[0] = 0x02;
@@ -183,7 +183,7 @@ void testDigitFive() {
 
     assert(same(pointDetail(Outcome::absence_confirmed, State::complete, eapol), "No handshake"));
     assert(same(pointDetail(Outcome::absence_confirmed, State::complete, absenceMode),
-               "Absence confirmed"));
+                "Absence confirmed"));
 
     // The counter counts a point as a success by the mode's meaning.
     RunReport report;

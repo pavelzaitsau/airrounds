@@ -1,0 +1,25 @@
+sourcecode:
+  type: git
+  location:
+    origin: https://github.com/pavelzaitsau/airrounds.git
+    commit_sha: 37fb9394a9c31c29d0f47982c8ee46e55852d78b
+    subdir: flipper
+
+short_description: Passive, receive-only Wi-Fi capture for the ESP32-S2 Devboard.
+
+description: "@README.md"
+
+changelog: |
+  ## 0.2
+  - Show the capture type on the capture screen.
+  - Accept every hashcat message pair in the EAPOL check.
+
+  ## 0.1
+  - First release: passive beacon and EAPOL capture to the Devboard SD card.
+
+screenshots:
+  - screenshots/01-menu.png
+  - screenshots/02-scanning.png
+  - screenshots/03-networks.png
+  - screenshots/04-capture.png
+  - screenshots/05-about.png

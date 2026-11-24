@@ -20,11 +20,11 @@ int main() {
     assert(size == deauthFrameSize && size == 26);
     assert(frame[0] == 0xC0 && frame[1] == 0x00); // Deauthentication management frame, no DS flags.
     assert(frame[2] == 0 && frame[3] == 0);       // Duration.
-    assert(std::memcmp(frame + 4, client, 6) == 0);  // Address 1: the client.
-    assert(std::memcmp(frame + 10, bssid, 6) == 0);  // Address 2: the access point.
-    assert(std::memcmp(frame + 16, bssid, 6) == 0);  // Address 3: the BSSID.
-    assert(frame[22] == 0 && frame[23] == 0);     // Sequence control.
-    assert(frame[24] == 7 && frame[25] == 0);     // Reason 7, little-endian.
+    assert(std::memcmp(frame + 4, client, 6) == 0); // Address 1: the client.
+    assert(std::memcmp(frame + 10, bssid, 6) == 0); // Address 2: the access point.
+    assert(std::memcmp(frame + 16, bssid, 6) == 0); // Address 3: the BSSID.
+    assert(frame[22] == 0 && frame[23] == 0);       // Sequence control.
+    assert(frame[24] == 7 && frame[25] == 0);       // Reason 7, little-endian.
 
     // A different reason code is little-endian across both bytes.
     assert(buildDeauthFrame(frame, sizeof(frame), client, bssid, 0x1234) == deauthFrameSize);

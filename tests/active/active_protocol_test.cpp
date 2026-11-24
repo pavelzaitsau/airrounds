@@ -1,6 +1,6 @@
-// This test compiles the active-build protocol path by defining AIRROUNDS_ACTIVE before the include.
-// The default-build path (a mode 02 tail rejected, the modes read listing only 02 00 01) is covered
-// by tests/uart/protocol_test.cpp, which the gate compiles without the define.
+// This test compiles the active-build protocol path by defining AIRROUNDS_ACTIVE before the
+// include. The default-build path (a mode 02 tail rejected, the modes read listing only 02 00 01)
+// is covered by tests/uart/protocol_test.cpp, which the gate compiles without the define.
 #define AIRROUNDS_ACTIVE 1
 
 // Keep every check active in builds that define NDEBUG.

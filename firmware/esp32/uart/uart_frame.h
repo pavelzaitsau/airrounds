@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_UART_FRAME_H
+#define AIRROUNDS_SHARED_UART_FRAME_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -124,3 +125,4 @@ struct Envelope {
 
 } // namespace uart
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_UART_FRAME_H

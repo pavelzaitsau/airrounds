@@ -13,10 +13,10 @@
 #include <gui/modules/byte_input.h>
 #include <gui/view_dispatcher.h>
 
-#include "../firmware/esp32/uart/capture_path.h"
 #include "esp_flasher.h"
 #include "network_list.h"
 #include "profile_storage.h"
+#include "shared/capture_path.h"
 #include "ui_state.h"
 
 #ifndef AIRROUNDS_EMULATOR

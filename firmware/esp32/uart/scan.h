@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_SCAN_H
+#define AIRROUNDS_SHARED_SCAN_H
 
 #include "../session/target.h"
 #include "uart_frame.h"
@@ -154,3 +155,4 @@ inline bool readScanEntry(Fields& fields, ScanEntry& entry) {
 
 } // namespace uart
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_SCAN_H

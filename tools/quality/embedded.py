@@ -39,7 +39,7 @@ def verify_image(path, environment):
             raise SystemExit(f"Image failed {field} verification: {path}")
 
 
-def firmware_metadata(environment):
+def firmware_metadata(environment, extra_roots=()):
     revision = environment.get("AIRROUNDS_REVISION")
     if revision is None:
         revision = "unknown"
@@ -57,6 +57,13 @@ def firmware_metadata(environment):
         if path.suffix in (".h", ".ino") and path.is_file():
             fingerprint.update(path.relative_to(sources).as_posix().encode() + b"\0")
             fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
+    # The active build folds firmware/active into the build ID so two active images that differ only
+    # there get distinct IDs; the default build passes no extra root, so its ID is unchanged.
+    for extra in extra_roots:
+        for path in sorted(extra.rglob("*")):
+            if path.suffix in (".h", ".ino") and path.is_file():
+                fingerprint.update(path.relative_to(ROOT).as_posix().encode() + b"\0")
+                fingerprint.update(hashlib.sha256(path.read_bytes()).digest())
     build = fingerprint.hexdigest()[:16]
     print(f"AirRounds source build ID {build}, revision {revision}", flush=True)
     # -fstack-usage only writes a report; it leaves the generated code unchanged.
@@ -98,24 +105,40 @@ def main():
     if not sketches:
         raise SystemExit("No ESP32 examples found")
     sketches.append(ROOT / "firmware/esp32/airrounds_uart")
+    # The opt-in active build: the passive firmware plus the one transmit path in firmware/active.
+    sketches.append(ROOT / "firmware/active/airrounds_active")
     for sketch in sketches:
         name = sketch.name
         destination = OUTPUT / "esp32" / name
         destination.mkdir(parents=True, exist_ok=True)
         fqbn = "esp32:esp32:esp32s2"
         libraries = ["--library", ROOT / "firmware/esp32/storage"]
-        if name in ("airrounds_passive_smoke", "airrounds_uart"):
+        extra_props = []
+        if name in ("airrounds_passive_smoke", "airrounds_uart", "airrounds_active"):
             fqbn += ":CDCOnBoot=cdc"
             libraries += ["--library", ROOT / "firmware/esp32/session"]
         if name == "airrounds_uart":
             libraries += ["--library", ROOT / "firmware/esp32/uart", *firmware_metadata(environment)]
-        compiled = run([cli, "compile", "--fqbn", fqbn, *libraries,
+        if name == "airrounds_active":
+            metadata = firmware_metadata(environment, [ROOT / "firmware/active"])
+            # Add the opt-in define to the same extra_flags property; a second property overrides it.
+            metadata[-1] = metadata[-1].replace("compiler.cpp.extra_flags=",
+                                                 "compiler.cpp.extra_flags=-DAIRROUNDS_ACTIVE=1 ")
+            # passive_visit.h lives in the default sketch folder, so expose it as a library too.
+            libraries += ["--library", ROOT / "firmware/esp32/uart",
+                          "--library", ROOT / "firmware/esp32/airrounds_uart",
+                          "--library", ROOT / "firmware/active", *metadata]
+            # The transmit path overrides ieee80211_raw_frame_sanity_check, which the ESP-IDF
+            # libnet80211.a also defines, so the link needs -zmuldefs to let the override win.
+            # This flag is confined to the active build, so the default image is unaffected.
+            extra_props = ["--build-property", "compiler.c.elf.extra_flags=-Wl,-zmuldefs"]
+        compiled = run([cli, "compile", "--fqbn", fqbn, *libraries, *extra_props,
                         "--build-property", f"tools.esptool_py.path={ESP / 'venv/bin'}",
                         "--build-property", "tools.esptool_py.cmd=esptool.py",
                         "--build-path", ROOT / "build/embedded" / name,
                         "--output-dir", destination, sketch], environment, capture=True)
         verify_image(destination / (name + ".ino.bin"), environment)
-        if name == "airrounds_uart":
+        if name in ("airrounds_uart", "airrounds_active"):
             memory.esp32_memory(compiled.stdout, ROOT / "build/embedded" / name / "sketch" /
                                 (name + ".ino.cpp.su"))
         # Review project code with the actual SDK defines/include paths. These two

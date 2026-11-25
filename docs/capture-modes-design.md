@@ -15,11 +15,11 @@ the menu and status checks that R4 and R5 update.
 
 | Component | File | Owns |
 | --- | --- | --- |
-| `CaptureMode` contract | `firmware/esp32/session/capture_mode.h` | The calls a mode answers during one visit. It has no transmit operation. |
+| `CaptureMode` contract | `firmware/esp32/session/capture_mode.h` | The calls a mode answers during one visit. It has no transmit operation; the architecture stage adds a transmit primitive to `ModeContext` for the active mode, not to this contract. |
 | `BeaconMode` | `firmware/esp32/session/beacon_mode.h` | The T8 beacon capture. It wraps `PassiveSession` and changes none of its logic. |
 | Shared PCAP writer | `firmware/esp32/storage/pcap_record.h` | One sealed PCAP per visit, the frame-type check, and the closed-file receipt. |
 | `PassiveVisit` | `firmware/esp32/airrounds_uart/passive_visit.h` | Radio, receive filter, queue, card mount, journal, and scan. It calls the mode and the writer. |
-| `PassiveRound` | `firmware/esp32/uart/passive_round.h` | Visit order, round deadline, and point results. It takes the mode of a round and sets the per-mode budget: 10 s per point for Beacon, 60 s for EAPOL. |
+| `PassiveRound` | `firmware/esp32/uart/passive_round.h` | Visit order, round deadline, and point results. It takes the mode of a round and sets the per-mode budget: 10 s per point for Beacon, 60 s for EAPOL and for the active mode. |
 | Mode descriptor | `flipper/capture_mode.h` | Labels, availability, and the meaning of success for each mode. |
 | Capture mode screen | `flipper/airrounds.cpp` | The menu item, the screen, the locks, and the local choice. |
 
@@ -37,7 +37,7 @@ graph TD
   Round -->|VisitBackend| Visit[PassiveVisit: radio, filter, card, journal, scan]
   Visit -->|CaptureMode| Beacon[BeaconMode]
   Visit -->|CaptureMode| Eapol[EapolMode]
-  Visit -.->|future| TodoB[Todo B]
+  Visit -->|CaptureMode, active build| Active[Active EAPOL]
   Visit --> Writer[Shared PCAP writer and receipt]
 ```
 
@@ -112,8 +112,10 @@ or the card mount fails. The journal records the same result as the reply.
 every slot in the scan path, the meaning of success, the wire ID, and two
 flags. `implied` marks a mode that every board supports. `implemented` marks
 a mode the app can run. Beacon is both. EAPOL is implemented but not implied, so
-the screen offers it only once the board lists it. Todo B is neither, so the
-screen shows it with **Soon**.
+the screen offers it only once the board lists it. The active EAPOL mode fills
+Todo B. The app marks it implemented but not implied, so the screen offers it only
+on a board that lists it, which only the opt-in active build does. A default-build
+board does not list it, so the screen shows the slot with **Soon**.
 
 | Function | Rule |
 | --- | --- |
@@ -153,8 +155,10 @@ byte, and the client would report a lost link.
 Record these answers in this document, under a heading for the mode, before
 the mode is built. A mode without an entry stays unavailable.
 
-- Receive only: confirm that the mode needs no transmission. The contract has
-  no transmit call, and the mode adds none.
+- Transmission: a passive mode confirms that it needs no transmission; the
+  contract has no transmit call, and the mode adds none. An active mode instead
+  declares its transmit path, its confinement to the opt-in build, and its
+  compliance with [active operation](acceptable-use.md#active-operation).
 - Frame types: list the types the mode declares and why it needs each one.
 - Records: say whether it saves one frame or a chain, the largest chain, and
   the RAM it needs.
@@ -172,6 +176,11 @@ the mode is built. A mode without an entry stays unavailable.
   define the evidence of absence; see [Open questions](#open-questions).
 - Legal basis: an own network, or a network whose owner permits the test in
   writing, under the scope and limits in [acceptable use](acceptable-use.md).
+- Active transmit, for an active mode only: state the frame it transmits, the
+  target selection, the burst size, the per-round cap, the auto-stop and
+  kill-switch behaviour, and the audit record. Confirm the transmit is a targeted
+  unicast deauthentication frame only, under
+  [active operation](acceptable-use.md#active-operation).
 
 ### EAPOL mode
 
@@ -214,24 +223,114 @@ target access point.
 - **Legal basis.** An own network, or a network whose owner permits the test in
   writing, under the scope and limits in [acceptable use](acceptable-use.md).
 
+### Active EAPOL mode
+
+The mode transmits a targeted unicast deauthentication frame to force a client
+off the round's target access point, then records the EAPOL-Key frames of the
+rejoin. It fills the Todo B slot. It exists only in the opt-in active build; the
+default build excludes it. The requirements are in [T12](t12.md).
+
+- **Transmission.** The mode transmits, unlike every passive mode. It sends a
+  unicast deauthentication frame to one client of the target access point. The one
+  `esp_wifi_80211_tx` call site lives in a reviewed file outside the default gate's
+  `firmware/esp32/` scan root, compiled only into the opt-in active build. The
+  architecture stage adds the transmit primitive to a `ModeContext`, through the R6
+  `poll` call; the current contract has no transmit call.
+- **Target client.** The mode learns the target client passively, and only from an
+  uplink data frame of the target access point: ToDS set and FromDS clear, so the
+  client is the transmitter address (addr2). A transmitter address is always an
+  individual address, so the target is never a group address. The mode rejects a
+  candidate that is group-addressed, equal to the target BSSID, or all zero. It
+  ignores downlink, IBSS, and WDS frames for selection. It deauthenticates that one
+  client only, and never broadcasts.
+- **Capture before transmit.** The mode checks for a captured handshake before it
+  arms the burst. A client already mid-join, whose EAPOL-Key frame arrives before
+  the burst fires, suppresses the transmit: the mode captures it with no transmit.
+  No qualifying client within the budget means no target, no transmit, and a
+  `not_observed` result. The mode cannot deauthenticate a client it never saw.
+- **Transmit bounds.** The mode sends a burst of 3 deauthentication frames, 100 ms
+  apart. If no EAPOL-Key frame arrives within 5 s, it sends one more burst, for at
+  most 2 bursts per visit. A per-round cap of 30 frames, for 5 points at 2 bursts of
+  3 frames, bounds a whole round. The burst size, the re-burst wait, the per-visit
+  burst count, and the per-round cap are compile-time constants, not operator
+  settings.
+- **Auto-stop and kill.** The mode stops transmitting once it records any
+  EAPOL-Key frame for the target, within one poll cycle. Auto-stop gates the transmit only; the capture
+  runs for the rest of the budget, so messages 2 to 4 arrive passively. A
+  deauthentication frame sent during the handshake would abort it, so the mode must
+  not transmit once a handshake has begun. A stop request from Flipper ends the
+  transmit at once.
+- **Early finish.** The visit ends as soon as it holds a crackable set for the
+  target: message 1 carrying a PMKID, or messages 1 and 2 from one client. The
+  round then moves to the next network and shares the remaining time. This exits
+  earlier than the passive EAPOL rule, which waits for messages 3 and 4, so a round
+  of several networks finishes sooner. The mode overrides `done()` for this rule,
+  and still saves every message it captured before the exit.
+- **Timing.** The mode uses the 60 s point budget of passive EAPOL. The burst runs
+  in the first second. The rest of the budget captures the rejoin.
+- **Frame types.** The mode declares `dataFrames`, as passive EAPOL does. The
+  receive filter passes `WIFI_PROMIS_FILTER_MASK_DATA`. It needs no management or
+  control receive.
+- **Records.** The saved records are the EAPOL-Key frames, one to four, exactly as
+  passive EAPOL saves them. The mode does not save the frames it transmits; the
+  journal records those instead.
+- **Identifiers.** The PCAP holds the handshake frames, so the target BSSID, the
+  client MAC address, and the EAPOL-Key fields reach the card, as for passive
+  EAPOL. The journal holds the transmit audit, because a deauthentication frame is
+  a management frame and the mode declares `dataFrames` only: the shared writer's
+  frame-type gate and the `check_pcap.py --eapol` invariant both refuse a
+  management frame in the capture PCAP, so a transmitted frame never reaches it.
+  The audit records the reason code, the frame count, the target BSSID, the target
+  client MAC address, and a timestamp per transmitted frame. No client MAC address
+  reaches the Flipper screen.
+- **Target.** The mode drops every received frame whose BSSID is not the target,
+  as passive EAPOL does, and it transmits only to a client of the target.
+- **Payload.** The mode decrypts nothing and derives no key. It saves only the raw
+  handshake frame bytes. The deauthentication frame carries no key material: it is
+  a fixed 26-byte management frame with a reason code, built from the IEEE 802.11
+  standard.
+- **Evidence.** A point succeeds when the mode saves at least one EAPOL-Key frame
+  for the target, as passive EAPOL. `saved` means at least one EAPOL-Key frame, not
+  a complete handshake; `check_pcap.py --eapol` reports whether a client completed a
+  join. A client that ignores the deauthentication under 802.11w, or reassociates
+  without a full 4-way handshake, produces no handshake, which is `not_observed`,
+  not an error. The architecture stage defines the Mac check that verifies the
+  journal transmit audit.
+- **Legal basis.** An own network, or a network whose owner permits active
+  transmission in writing, under
+  [active operation](acceptable-use.md#active-operation). The operator attestation
+  precedes the round.
+
 ## Invariants
 
-The refactoring keeps what the [security assurance gap](t9.md#security-assurance-gap)
-relies on.
+The default build keeps what the [security assurance gap](t9.md#security-assurance-gap)
+relies on. The active build confines its one transmit path instead; see
+[active operation](acceptable-use.md#active-operation).
 
 - The radio starts in `WIFI_MODE_NULL` with a promiscuous receive callback.
-- The firmware source has no frame-transmit call such as `esp_wifi_80211_tx`.
-  `tests/mac/test_receive_only.py` fails the build on an unreviewed radio call
-  or a non-`WIFI_MODE_NULL` radio mode under `firmware/esp32/`.
+- The default build's firmware source has no frame-transmit call such as
+  `esp_wifi_80211_tx`. `tests/mac/test_receive_only.py` fails the build on an
+  unreviewed radio call or a non-`WIFI_MODE_NULL` radio mode under
+  `firmware/esp32/`. The active build's one reviewed transmit file holds the sole
+  `esp_wifi_80211_tx` call, outside that `firmware/esp32/` scan root, and the active
+  gate variant proves no other file transmits. The active build opens the radio in
+  `WIFI_MODE_STA`, confined to `firmware/active/`, so the interface exists for the
+  transmit; the default build never leaves `WIFI_MODE_NULL`. The
+  [hardware bench](t12.md#hardware-bench) confirms the transmit.
 - The receive filter passes the declared frame types only. For Beacon and
   for the scan it passes management frames only, as before.
 - `onFrame` runs under `receiveLock_` in the Wi-Fi callback. A mode that
   needs work outside the callback gets a `poll` call with step R6, not
-  callback time.
+  callback time. The active mode drives its timed deauthentication transmit from
+  `poll`, never from `onFrame`.
 
-A future mode may capture handshake frames under the four limits in
+A future passive mode may capture handshake frames under the four limits in
 [acceptable use](acceptable-use.md). The no-transmit and `WIFI_MODE_NULL`
-invariants above hold for such a mode too.
+invariants above hold for such a mode too. The active mode (Todo B) is the
+exception: it transmits a targeted deauthentication frame in a separate opt-in
+build, under [active operation](acceptable-use.md#active-operation). The
+[active EAPOL mode](#active-eapol-mode) entry and the default-build scoping above
+define it. See [T12](t12.md).
 
 ## Implementation steps
 
@@ -242,10 +341,11 @@ invariants above hold for such a mode too.
 | R3 | Built in T10 | The Flipper descriptor and labels from it. The screens show the same Beacon labels. |
 | R4 | Built in T10 | The **Capture mode** menu item, the menu scroll, the screen, its locks, and the reset of point results on a change. The UI emulator checks the menu, the screen, and the Board state unknown and Session active locks. `capture_mode_labels_test.cpp` checks every row of the lock table, including Scan active, which no screen can reach while a scan runs. |
 | R5 | Built in T11 | Feature bit 5, `modes`, the `mode` tail, `round_status_mode`, digit `5`, **Mode pending**, and the return to Beacon. |
-| R6 | With the first mode that needs it | `poll(nowUs, context)` for work outside the callback, and a `ModeContext` with `tune(channel)` and `note(key, value)`. Time spent in `tune` counts against the point budget and the T8 fair share. |
+| R6 | Planned in T12 | `poll(nowUs, context)` for work outside the callback, and a `ModeContext` with `tune(channel)` and `note(key, value)`. Time spent in `tune` counts against the point budget and the T8 fair share. The active EAPOL mode is the first mode that needs R6: `ModeContext` gains a transmit primitive for the deauthentication burst. |
 
-T11 built R5 with the EAPOL mode. R6 comes with the first mode that needs work
-outside the receive callback; building it now would add code that no mode uses.
+T11 built R5 with the EAPOL mode. R6 comes with the active EAPOL mode in T12,
+which transmits its deauthentication burst from `poll`, outside the receive
+callback.
 
 ## Hardware check
 
@@ -291,5 +391,6 @@ T11 built these; they run under `make check`.
 
 | Question | Needed before |
 | --- | --- |
-| The name and the behaviour of Todo B | The next real mode |
+| The name and the behaviour of Todo B | Resolved: the [active EAPOL mode](#active-eapol-mode) fills it. |
+| Cross-round dedup of captured networks | Deferred: within-round no-repeat covers the main case, and re-running a profile is an explicit operator choice. |
 | The evidence that the Mac checks for a confirmed absence | The first absence mode |

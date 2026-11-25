@@ -226,7 +226,7 @@ SessionReport testRound() {
 
 void testJournalFile(const char* directory, const SessionReport& report) {
     VisitStatistics stats[airrounds::session::Profile::capacity]{};
-    stats[0] = {100, 140, 12, 3, 2, 86, 85};
+    stats[0] = {100, 140, 12, 3, 2, 86, 85, 0, 0, {}};
     const std::string final = std::string(directory) + "/session-0000000000001234-00000001.log";
     const bool written =
         writeSessionJournal(directory, report, stats, {"build-test", "revision-test"});
@@ -502,7 +502,7 @@ void testFullFivePointJournal(const char* directory) {
         assert(added);
         report.status.results[index] = Outcome::saved;
         stats[index] = {UINT64_MAX, UINT64_MAX, UINT32_MAX, UINT32_MAX,
-                        UINT32_MAX, UINT64_MAX, SIZE_MAX};
+                        UINT32_MAX, UINT64_MAX, SIZE_MAX,   0,          0, {}};
     }
     const JournalBuild build{"0123456789abcdef", "0123456789abcdef0123456789abcdef01234567"};
     const bool written = writeSessionJournal(directory, report, stats, build);
@@ -529,7 +529,7 @@ void testEapolJournal(const char* directory) {
     assert(added);
     report.status.results[0] = Outcome::saved;
     VisitStatistics stats[airrounds::session::Profile::capacity]{};
-    stats[0] = {100, 57000000, 5, 1, 0, 300, 299}; // 5 observed, 1 accepted, 4 filtered.
+    stats[0] = {100, 57000000, 5, 1, 0, 300, 299, 0, 0, {}}; // 5 observed, 1 accepted, 4 filtered.
     const bool written =
         writeSessionJournal(directory, report, stats, {"build-test", "revision-test"});
     assert(written);

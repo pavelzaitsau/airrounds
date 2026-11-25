@@ -11,6 +11,7 @@ namespace uart {
 // constant equals its CaptureModeId value.
 constexpr uint8_t beaconModeId = 0x00;
 constexpr uint8_t eapolModeId = 0x01;
+constexpr uint8_t activeModeId = 0x02;
 
 struct CaptureId {
     VisitId visit;
@@ -62,6 +63,11 @@ public:
     // Points the visit at the capture mode for this round, before beginRound. The default no-op
     // keeps Beacon, so a backend that supports only Beacon needs no override.
     virtual void selectMode(uint8_t /*modeId*/) {}
+    // Seed the round-scoped transmit budget once per round at start. The default ignores it, so a
+    // passive-only backend needs no override.
+    virtual void seedTransmitBudget(uint32_t /*frames*/) {}
+    // Give the capture mode time outside the receive callback (step R6). The default does nothing.
+    virtual void pollMode() {}
     virtual void beginRound(const SessionReport&) {}
     virtual VisitStart start(const session::Target& target, const VisitBudget& budget) = 0;
     virtual bool observationDone() const = 0;
@@ -85,6 +91,7 @@ public:
         // Select on every start, after the running-round check so a start never switches the mode
         // of a running round, and so a start after an EAPOL round returns the visit to Beacon.
         visit_.selectMode(modeId);
+        visit_.seedTransmitBudget(transmitCap(modeId));
         id_ = id;
         status_ = {};
         status_.profile = profile;
@@ -126,9 +133,12 @@ public:
             advancePreparation();
         } else if (terminalState_ != State::idle) {
             updateJournal();
-        } else if (state_ == State::running &&
-                   (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone())) {
-            endObservation();
+        } else if (state_ == State::running) {
+            if (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone()) {
+                endObservation();
+            } else {
+                visit_.pollMode();
+            }
         } else if (state_ == State::finalizing) {
             updateSaveResult();
         }
@@ -145,7 +155,13 @@ private:
     // storage within 10 s; EAPOL waits for a client to join, so it gets 60 s, of which the mode
     // keeps a 3 s save reserve. See docs/t11.md, "Timing".
     static constexpr uint64_t visitBudgetUs(uint8_t modeId) {
-        return modeId == eapolModeId ? 60000000ULL : 10000000ULL;
+        return (modeId == eapolModeId || modeId == activeModeId) ? 60000000ULL : 10000000ULL;
+    }
+
+    // The per-round transmit cap: 0 for a passive mode; the active mode sends at most two bursts of
+    // three frames at each of up to five points. TransmitBudget enforces it in the shared layer.
+    static constexpr uint32_t transmitCap(uint8_t modeId) {
+        return modeId == activeModeId ? 30U : 0U;
     }
 
     void advancePreparation() {

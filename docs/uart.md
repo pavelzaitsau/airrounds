@@ -284,7 +284,7 @@ why the mode travels only in new commands.
 | Item | Rule |
 | --- | --- |
 | Feature bit 5 (`20`) | The board supports capture modes. A board advertises it exactly when it has a scan. One bit covers every mode. |
-| `modes` | Read command, scope zero, no arguments. The OK reply appends `modes 02 00 01`: Beacon `00` and EAPOL `01`, two hex digits each. |
+| `modes` | Read command, scope zero, no arguments. The OK reply appends `modes 02 00 01`: a count, then Beacon `00` and EAPOL `01`, two hex digits each. The opt-in active build appends `modes 03 00 01 02`, which adds the active mode `02`; the default build never lists `02`. |
 | `mode <id>` | Optional tail at the end of `round`, only with bit 5. Without it, and for `start`, the round is Beacon. An ID the board does not list returns `bad_request`. A board without bit 5 returns `bad_request` for a `mode` tail and a `modes` read. |
 | `round_status_mode` | Read command with bit 5, like `round_status_detail`. It inserts `mode <id>` after the optional `journal` and `interrupted` fields, just before `aps`. |
 | Result digit `5` | `absence_confirmed`. It appears only in `round_status_mode` replies. The EAPOL mode never returns it. |

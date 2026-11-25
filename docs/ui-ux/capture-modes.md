@@ -6,9 +6,12 @@ so the operator picks what a round captures, and it reserves two future modes
 without defining them. The phase also moves Beacon behind a capture-mode
 contract in the firmware and the app, with no change to its behaviour.
 
-AirRounds stays receive-only. A capture mode never transmits. The phase does not
-add handshake capture, deauthentication, injection, or traffic decryption.
-Deauthentication, injection, and decryption are outside AirRounds. A later mode
+In the shipped default build AirRounds stays receive-only, and a capture mode
+never transmits. Phase T10 does not add handshake capture, deauthentication,
+injection, or traffic decryption. Injection and traffic decryption stay outside
+AirRounds. The one transmit path is the separate opt-in active mode, which sends
+a targeted deauthentication frame; see
+[active operation](../acceptable-use.md#active-operation). A later passive mode
 may add handshake capture under the four limits in [acceptable use][aup-modes].
 See [Security and permitted use](#security-and-permitted-use).
 
@@ -21,10 +24,10 @@ refactoring, the mode contract, and the admission checklist for a new mode.
 ## Approved design
 
 The operator keeps the scan workflow and gets a **Capture mode** item in the
-main menu. The modes are **Beacon** and **EAPOL** (added in T11); a placeholder
-**Todo B** holds the place of a future mode and shows **Soon**. The operator
-cannot select a placeholder, and the app offers **EAPOL** only once the board
-lists it. A round runs in one mode from start to finish.
+main menu. The modes are **Beacon**, **EAPOL** (added in T11), and **Deauth**
+(added in T12). The app offers **EAPOL** and **Deauth** only once the board lists
+them, and only the opt-in active build lists **Deauth**, so a default board shows
+it with **Soon**. A round runs in one mode from start to finish.
 
 A capture mode owns its labels and the meaning of its result. A future mode
 can define success as a frame found or as an absence confirmed without a
@@ -61,7 +64,7 @@ The scan menu gains one item. The order is **Scan area**, **Capture mode**,
 ## Capture mode screen
 
 The screen has the heading **Capture mode** and three rows: **Beacon**,
-**EAPOL**, and **Todo B**.
+**EAPOL**, and **Deauth**.
 
 - A `*` marker stands before the current mode, wherever the focus is.
 - An unavailable mode shows **Soon** at the right of its row.
@@ -159,7 +162,8 @@ Down do not clear it. **Not available yet** clears at the next key press.
 
 The EAPOL **Captured** result reports that the board saved at least one EAPOL-Key
 frame for the target. It does not claim a completed join; the Mac check owns that
-judgement.
+judgement. The **Deauth** mode uses the same labels as **EAPOL**; it forces the
+rejoin that produces the handshake. See [active operation](../acceptable-use.md#active-operation).
 
 Each point result maps to a label slot by the mode's meaning of success:
 
@@ -215,7 +219,7 @@ it is built.
 
 ## Open questions
 
-- The name **Todo B** is a placeholder. A real mode replaces it.
+- The former **Todo B** slot is now the **Deauth** mode (T12).
 - The evidence for a confirmed absence is undefined. The design document
   defines it before the first mode of that kind is built.
 

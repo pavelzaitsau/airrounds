@@ -44,8 +44,38 @@ public:
 
     // Point the capture pipeline at the round's mode. The wire IDs match the CaptureModeId values.
     void selectMode(uint8_t modeId) override {
-        mode_ = modeId == eapolModeId ? static_cast<session::CaptureMode*>(&eapol_)
-                                      : static_cast<session::CaptureMode*>(&beacon_);
+        if (modeId == eapolModeId) {
+            mode_ = &eapol_;
+            return;
+        }
+#ifdef AIRROUNDS_ACTIVE
+        if (modeId == activeModeId && activeMode_ != nullptr) {
+            mode_ = activeMode_;
+            return;
+        }
+#endif
+        mode_ = &beacon_;
+    }
+
+    void seedTransmitBudget(uint32_t frames) override { transmitBudget_.seed(frames); }
+
+#ifdef AIRROUNDS_ACTIVE
+    // These setters compile only in the active build. The default build therefore has no way to wire
+    // a transmitter or to leave WIFI_MODE_NULL, not even by casting an integer to wifi_mode_t, so the
+    // runtime receive-only guarantee holds beyond the token gate. The station-mode token lives in
+    // firmware/active, never here.
+    void setTransmitter(session::Transmitter* transmitter) { transmitter_ = transmitter; }
+    void setRadioMode(wifi_mode_t mode) { radioMode_ = mode; }
+    // The active capture mode lives in firmware/active, so the default build holds no instance of it.
+    void setActiveMode(session::CaptureMode* mode) { activeMode_ = mode; }
+#endif
+
+    // Runs on the UART task between frames (step R6). The default build injects no transmitter, so
+    // transmit stays inert; the active build sets transmitter_. A mode that shares state with
+    // onFrame coordinates the two itself, because this runs on the UART task, not the receive lock.
+    void pollMode() override {
+        session::ModeContext context{transmitter_, &transmitBudget_};
+        mode_->poll(nowUs(), context);
     }
 
     void startScan() override {
@@ -121,6 +151,15 @@ public:
         portEXIT_CRITICAL(&receiveLock_);
         const bool disabled = esp_wifi_set_promiscuous(false) == ESP_OK;
         closeRadio(true);
+        // Record the transmit audit on every concluded point, even if the stop faults, so a burst is
+        // never under-reported. Reception is off now, and this reads UART-task state only. A passive
+        // mode reports nothing, so the default build records zeros.
+        auto& stats = statistics_[currentPoint_];
+        stats.txFrames = mode_->transmittedFrames();
+        stats.txReason = mode_->transmitReason();
+        if (const uint8_t* targetClient = mode_->transmitTarget()) {
+            memcpy(stats.txClient, targetClient, sizeof(stats.txClient));
+        }
         return disabled && !radioFault_;
     }
 
@@ -274,7 +313,7 @@ private:
             return false;
         }
         const bool started = esp_wifi_set_storage(WIFI_STORAGE_RAM) == ESP_OK &&
-                             esp_wifi_set_mode(WIFI_MODE_NULL) == ESP_OK &&
+                             esp_wifi_set_mode(radioMode_) == ESP_OK &&
                              esp_wifi_start() == ESP_OK;
         wifi_promiscuous_filter_t filter{receiveFilter(frameTypes)};
         // Control frames pass a second, per-subtype filter; ask for every subtype explicitly.
@@ -404,10 +443,18 @@ private:
                   "the Beacon wire ID must equal its CaptureModeId value");
     static_assert(eapolModeId == static_cast<uint8_t>(session::CaptureModeId::eapol),
                   "the EAPOL wire ID must equal its CaptureModeId value");
+    static_assert(activeModeId == static_cast<uint8_t>(session::CaptureModeId::active),
+                  "the active wire ID must equal its CaptureModeId value");
 
     session::BeaconMode beacon_;
     session::EapolMode eapol_;
     session::CaptureMode* mode_ = &beacon_;
+    session::TransmitBudget transmitBudget_;
+    session::Transmitter* transmitter_ = nullptr;   // Set only in the active build.
+    wifi_mode_t radioMode_ = WIFI_MODE_NULL;        // The station mode in the active build only.
+#ifdef AIRROUNDS_ACTIVE
+    session::CaptureMode* activeMode_ = nullptr;    // The active mode instance from firmware/active.
+#endif
     mutable portMUX_TYPE receiveLock_ = portMUX_INITIALIZER_UNLOCKED;
     uint64_t startedUs_ = 0;
     bool listening_ = false;

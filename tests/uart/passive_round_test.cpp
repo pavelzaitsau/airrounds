@@ -115,6 +115,13 @@ public:
         lastModeId = modeId;
     }
 
+    void seedTransmitBudget(uint32_t frames) override {
+        ++seedCount;
+        lastTransmitCap = frames;
+    }
+
+    void pollMode() override { ++pollModeCount; }
+
     void advance(uint64_t us) { now_ += us; }
     void expire() { now_ = startedUs_ + PassiveSession::windowUs; }
     bool holdSave = false;
@@ -124,6 +131,9 @@ public:
     uint64_t lastShareUs = 0;
     uint8_t lastModeId = beaconModeId;
     unsigned selectCount = 0;
+    uint32_t lastTransmitCap = 0;
+    unsigned seedCount = 0;
+    unsigned pollModeCount = 0;
     uint8_t channel() const { return visit_.channel(); }
     bool hasSample() const { return visit_.hasSample(); }
 
@@ -505,6 +515,28 @@ void checkPerModeBudget(const char* directory) {
     assert(visit.lastModeId == beaconModeId && visit.lastRoundDurationUs == 10000000);
 }
 
+void checkTransmitBudgetAndPoll(const char* directory) {
+    session::Profile one;
+    assert(one.add(first));
+    // A Beacon round seeds a zero transmit budget and still gets poll() time while running.
+    {
+        Visit visit(directory);
+        PassiveRound round(visit);
+        assert(round.start({boot, 40}, one));
+        assert(visit.seedCount == 1 && visit.lastTransmitCap == 0);
+        round.poll();
+        assert(round.state() == State::running && visit.pollModeCount >= 1);
+    }
+    // The active mode seeds 30 frames (5 points, 2 bursts of 3) and gets the 60 s budget.
+    {
+        Visit visit(directory);
+        PassiveRound round(visit);
+        assert(round.start({boot, 41}, one, activeModeId));
+        assert(visit.lastModeId == activeModeId && visit.lastTransmitCap == 30);
+        assert(round.status().mode == activeModeId && visit.lastRoundDurationUs == 60000000);
+    }
+}
+
 int main(int argc, char** argv) try {
     if (const char* problem = directoryProblem(argc, argv)) {
         std::cerr << "passive_round_test: " << problem << "; pass an empty temporary directory\n";
@@ -513,6 +545,7 @@ int main(int argc, char** argv) try {
     alarm(30); // A loop that never ends fails the test instead of hanging it.
     checkVisitShares();
     checkPerModeBudget(argv[1]);
+    checkTransmitBudgetAndPoll(argv[1]);
     checkRound(argv[1], 1, {6, 6}, true);
     checkRound(argv[1], 2, {1, 11}, true);
     checkRound(argv[1], 3, {6, 11}, false);

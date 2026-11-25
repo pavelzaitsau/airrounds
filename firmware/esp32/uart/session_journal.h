@@ -27,6 +27,9 @@ struct VisitStatistics {
     uint32_t queueOverflows;
     uint64_t bytesWritten;
     size_t verifiedFileSize;
+    uint32_t txFrames;   // Deauth frames the radio accepted for transmit this point (0 if passive).
+    uint16_t txReason;   // The deauthentication reason code, or 0.
+    uint8_t txClient[6]; // The target client MAC, or zero when nothing was transmitted.
 };
 
 // The capture-mode name for the journal mode= field, by the wire ID in RoundStatus.
@@ -36,6 +39,8 @@ inline const char* journalModeName(uint8_t modeId) {
         return "beacon";
     case eapolModeId:
         return "eapol";
+    case activeModeId:
+        return "active";
     default:
         return "unknown";
     }
@@ -54,8 +59,18 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
     const auto count = report.status.profile.size();
     const int header = snprintf(
         text, capacity,
+#ifdef AIRROUNDS_ACTIVE
+        "format=airrounds-session-v4\n"
+#else
         "format=airrounds-session-v3\n"
-        "firmware=%s build=%s revision=%s protocol=%02x radio=passive mode=%s\n"
+#endif
+        "firmware=%s build=%s revision=%s protocol=%02x radio="
+#ifdef AIRROUNDS_ACTIVE
+        "active"
+#else
+        "passive"
+#endif
+        " mode=%s\n"
         "boot=%016" PRIx64 " session=%08" PRIx32 " state=%s outcome=%s points=%zu\n"
         "started_us=%" PRIu64 " ended_us=%" PRIu64 " budget_us=%" PRIu64 "\n",
         firmwareVersion, build.id, build.revision, static_cast<unsigned>(version),
@@ -93,6 +108,20 @@ inline size_t formatSessionJournal(char* text, size_t capacity, const SessionRep
             return 0;
         }
         used += static_cast<size_t>(line);
+#ifdef AIRROUNDS_ACTIVE
+        uint64_t client = 0;
+        for (size_t octet = 0; octet < sizeof(point.txClient); ++octet) {
+            client = (client << 8U) | point.txClient[octet];
+        }
+        const int audit =
+            snprintf(text + used, capacity - used,
+                     "tx point=%zu frames=%" PRIu32 " reason=%u client=%012" PRIx64 "\n",
+                     index + 1, point.txFrames, static_cast<unsigned>(point.txReason), client);
+        if (audit <= 0 || static_cast<size_t>(audit) >= capacity - used) {
+            return 0;
+        }
+        used += static_cast<size_t>(audit);
+#endif
     }
     return used;
 }

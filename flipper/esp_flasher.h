@@ -36,8 +36,29 @@ struct FlashManifest {
     bool valid = false;
 };
 
-enum class FlashStage { idle, enter, sync, begin, write, end, verify, reset, done };
-enum class FlashError { none, io, sync, begin, write, end, mismatch, image, manifest, overflow };
+enum class FlashStage {
+    idle,
+    enter,
+    sync,
+    begin,
+    write,
+    end,
+    verify,
+    reset,
+    done
+};
+enum class FlashError {
+    none,
+    io,
+    sync,
+    begin,
+    write,
+    end,
+    mismatch,
+    image,
+    manifest,
+    overflow
+};
 
 namespace detail {
 
@@ -59,23 +80,23 @@ inline bool isHex(char character) {
 }
 
 inline char lowerHex(char character) {
-    return (character >= 'A' && character <= 'F') ? static_cast<char>(character - 'A' + 'a')
-                                                  : character;
+    return (character >= 'A' && character <= 'F') ? static_cast<char>(character - 'A' + 'a') :
+                                                    character;
 }
 
 // Find the value of "<key>" in the manifest JSON. The scan is global, so a key nested under an
 // object is found the same as a top-level one. Returns the pointer just past the colon, or nullptr.
 inline const char* findValue(const char* json, const char* key) {
     const size_t keyLength = strlen(key);
-    for (const char* cursor = strchr(json, '"'); cursor != nullptr;
-         cursor = strchr(cursor + 1, '"')) {
-        if (strncmp(cursor + 1, key, keyLength) == 0 && cursor[1 + keyLength] == '"') {
+    for(const char* cursor = strchr(json, '"'); cursor != nullptr;
+        cursor = strchr(cursor + 1, '"')) {
+        if(strncmp(cursor + 1, key, keyLength) == 0 && cursor[1 + keyLength] == '"') {
             const char* colon = strchr(cursor + 1 + keyLength, ':');
-            if (colon == nullptr) {
+            if(colon == nullptr) {
                 return nullptr;
             }
             ++colon;
-            while (*colon == ' ' || *colon == '\t') {
+            while(*colon == ' ' || *colon == '\t') {
                 ++colon;
             }
             return colon;
@@ -86,11 +107,11 @@ inline const char* findValue(const char* json, const char* key) {
 
 inline bool readNumber(const char* json, const char* key, uint32_t& value) {
     const char* cursor = findValue(json, key);
-    if (cursor == nullptr || *cursor < '0' || *cursor > '9') {
+    if(cursor == nullptr || *cursor < '0' || *cursor > '9') {
         return false;
     }
     uint32_t parsed = 0;
-    for (; *cursor >= '0' && *cursor <= '9'; ++cursor) {
+    for(; *cursor >= '0' && *cursor <= '9'; ++cursor) {
         parsed = parsed * 10U + static_cast<uint32_t>(*cursor - '0');
     }
     value = parsed;
@@ -100,13 +121,13 @@ inline bool readNumber(const char* json, const char* key, uint32_t& value) {
 // Copy a quoted string value into out, up to cap - 1 characters; out is always terminated.
 inline bool readString(const char* json, const char* key, char* out, size_t cap) {
     const char* cursor = findValue(json, key);
-    if (cursor == nullptr || *cursor != '"') {
+    if(cursor == nullptr || *cursor != '"') {
         return false;
     }
     ++cursor;
     size_t length = 0;
-    for (; *cursor != '"' && *cursor != '\0'; ++cursor) {
-        if (length + 1 >= cap) {
+    for(; *cursor != '"' && *cursor != '\0'; ++cursor) {
+        if(length + 1 >= cap) {
             return false;
         }
         out[length++] = *cursor;
@@ -125,16 +146,16 @@ inline FlashManifest parseManifest(const char* json) {
     const bool numbers = detail::readNumber(json, "offset", manifest.offset) &&
                          detail::readNumber(json, "size", manifest.size);
     const bool digest = detail::readString(json, "md5", manifest.md5, sizeof(manifest.md5));
-    if (!numbers || !digest || manifest.size == 0 || strlen(manifest.md5) != 32) {
+    if(!numbers || !digest || manifest.size == 0 || strlen(manifest.md5) != 32) {
         return manifest;
     }
-    for (char& character : manifest.md5) {
-        if (character != '\0' && !detail::isHex(character)) {
+    for(char& character : manifest.md5) {
+        if(character != '\0' && !detail::isHex(character)) {
             return manifest;
         }
         character = detail::lowerHex(character);
     }
-    if (detail::readString(json, "variant", variant, sizeof(variant))) {
+    if(detail::readString(json, "variant", variant, sizeof(variant))) {
         manifest.active = strcmp(variant, "active") == 0;
     }
     manifest.valid = true;
@@ -145,43 +166,49 @@ class EspFlasher {
 public:
     static constexpr size_t blockSize = 1024;
 
-    explicit EspFlasher(const FlasherIo& io) : io_(io) {}
+    explicit EspFlasher(const FlasherIo& io)
+        : io_(io) {
+    }
 
     using Progress = void (*)(void*, FlashStage, uint32_t done, uint32_t total);
 
     // Flash the image the manifest names. On success the board holds the new firmware, verified by
     // the ROM MD5, and the flow has reset it into the application. On any failure the board stays
     // in the ROM loader, reflashable on a retry, so a bad write never bricks it.
-    FlashError flash(const FlashManifest& manifest, Progress progress = nullptr,
-                     void* progressContext = nullptr) {
-        if (!manifest.valid) {
+    FlashError flash(
+        const FlashManifest& manifest,
+        Progress progress = nullptr,
+        void* progressContext = nullptr) {
+        if(!manifest.valid) {
             return fail(FlashError::manifest);
         }
         progress_ = progress;
         progressContext_ = progressContext;
         const uint32_t blocks = static_cast<uint32_t>((manifest.size + blockSize - 1) / blockSize);
         enter();
-        if (!sync()) {
+        if(!sync()) {
             return fail(FlashError::sync);
         }
-        if (!flashBegin(manifest.size, blocks, manifest.offset)) {
+        if(!flashBegin(manifest.size, blocks, manifest.offset)) {
             return fail(FlashError::begin);
         }
         const FlashError written = writeBlocks(blocks, manifest.size);
-        if (written != FlashError::none) {
+        if(written != FlashError::none) {
             return fail(written);
         }
-        if (!flashEnd()) {
+        if(!flashEnd()) {
             return fail(FlashError::end);
         }
-        if (!verifyMd5(manifest.offset, manifest.size, manifest.md5)) {
+        if(!verifyMd5(manifest.offset, manifest.size, manifest.md5)) {
             return fail(FlashError::mismatch);
         }
         reset();
         return FlashError::none;
     }
 
-    FlashStage stage() const { return stage_; }
+    FlashStage stage() const {
+        return stage_;
+    }
 
 private:
     enum : uint8_t {
@@ -191,7 +218,12 @@ private:
         cmdSync = 0x08,
         cmdMd5 = 0x13
     };
-    enum : uint8_t { slipEnd = 0xC0, slipEsc = 0xDB, slipEscEnd = 0xDC, slipEscEsc = 0xDD };
+    enum : uint8_t {
+        slipEnd = 0xC0,
+        slipEsc = 0xDB,
+        slipEscEnd = 0xDC,
+        slipEscEsc = 0xDD
+    };
     static constexpr size_t dataHeader = 16;
     static constexpr size_t maxData = dataHeader + blockSize;
     static constexpr size_t packetCapacity = 8 + maxData;
@@ -200,7 +232,7 @@ private:
 
     void report(FlashStage reached, uint32_t done, uint32_t total) {
         stage_ = reached;
-        if (progress_ != nullptr) {
+        if(progress_ != nullptr) {
             progress_(progressContext_, reached, done, total);
         }
     }
@@ -230,8 +262,8 @@ private:
         data[2] = 0x12;
         data[3] = 0x20;
         memset(data + 4, 0x55, sizeof(data) - 4);
-        for (int attempt = 0; attempt < 8; ++attempt) {
-            if (command(cmdSync, data, sizeof(data), 0, shortTimeoutMs)) {
+        for(int attempt = 0; attempt < 8; ++attempt) {
+            if(command(cmdSync, data, sizeof(data), 0, shortTimeoutMs)) {
                 return true;
             }
         }
@@ -250,15 +282,15 @@ private:
 
     FlashError writeBlocks(uint32_t blocks, uint32_t size) {
         report(FlashStage::write, 0, blocks);
-        for (uint32_t sequence = 0; sequence < blocks; ++sequence) {
+        for(uint32_t sequence = 0; sequence < blocks; ++sequence) {
             const uint32_t offset = sequence * blockSize;
             const size_t want = size - offset < blockSize ? size - offset : blockSize;
-            if (io_.readImage(io_.context, offset, payload_ + dataHeader, want) != want) {
+            if(io_.readImage(io_.context, offset, payload_ + dataHeader, want) != want) {
                 return FlashError::image;
             }
             // The ROM writes whole blocks, so pad the last block to the block size with 0xFF.
             memset(payload_ + dataHeader + want, 0xFF, blockSize - want);
-            if (!flashBlock(sequence)) {
+            if(!flashBlock(sequence)) {
                 return FlashError::write;
             }
             report(FlashStage::write, sequence + 1, blocks);
@@ -272,7 +304,7 @@ private:
         detail::writeU32(payload_ + 8, 0);
         detail::writeU32(payload_ + 12, 0);
         uint8_t checksum = 0xEF;
-        for (size_t index = 0; index < blockSize; ++index) {
+        for(size_t index = 0; index < blockSize; ++index) {
             checksum ^= payload_[dataHeader + index];
         }
         return command(cmdFlashData, payload_, maxData, checksum, longTimeoutMs);
@@ -295,13 +327,21 @@ private:
         detail::writeU32(data + 12, 0);
         uint8_t digest[40];
         size_t digestLength = 0;
-        if (!command(cmdMd5, data, sizeof(data), 0, longTimeoutMs, nullptr, digest, sizeof(digest),
-                     &digestLength) ||
-            digestLength < 32) {
+        if(!command(
+               cmdMd5,
+               data,
+               sizeof(data),
+               0,
+               longTimeoutMs,
+               nullptr,
+               digest,
+               sizeof(digest),
+               &digestLength) ||
+           digestLength < 32) {
             return false;
         }
-        for (size_t index = 0; index < 32; ++index) {
-            if (detail::lowerHex(static_cast<char>(digest[index])) != expected[index]) {
+        for(size_t index = 0; index < 32; ++index) {
+            if(detail::lowerHex(static_cast<char>(digest[index])) != expected[index]) {
                 return false;
             }
         }
@@ -310,10 +350,17 @@ private:
 
     // Send a command packet and read the matching response. value, respData, and respLength are
     // optional; respData holds the response payload without its two trailing status bytes.
-    bool command(uint8_t cmd, const uint8_t* data, size_t size, uint8_t checksum,
-                 uint32_t timeoutMs, uint32_t* value = nullptr, uint8_t* respData = nullptr,
-                 size_t respCap = 0, size_t* respLength = nullptr) {
-        if (8 + size > packetCapacity) {
+    bool command(
+        uint8_t cmd,
+        const uint8_t* data,
+        size_t size,
+        uint8_t checksum,
+        uint32_t timeoutMs,
+        uint32_t* value = nullptr,
+        uint8_t* respData = nullptr,
+        size_t respCap = 0,
+        size_t* respLength = nullptr) {
+        if(8 + size > packetCapacity) {
             fail(FlashError::overflow);
             return false;
         }
@@ -327,34 +374,39 @@ private:
         return readResponse(cmd, timeoutMs, value, respData, respCap, respLength);
     }
 
-    bool readResponse(uint8_t cmd, uint32_t timeoutMs, uint32_t* value, uint8_t* respData,
-                      size_t respCap, size_t* respLength) {
-        for (int frame = 0; frame < 64; ++frame) {
+    bool readResponse(
+        uint8_t cmd,
+        uint32_t timeoutMs,
+        uint32_t* value,
+        uint8_t* respData,
+        size_t respCap,
+        size_t* respLength) {
+        for(int frame = 0; frame < 64; ++frame) {
             size_t length = 0;
-            if (!slipRead(timeoutMs, length)) {
+            if(!slipRead(timeoutMs, length)) {
                 return false;
             }
-            if (length < 10 || response_[0] != 0x01 || response_[1] != cmd) {
+            if(length < 10 || response_[0] != 0x01 || response_[1] != cmd) {
                 continue;
             }
-            const size_t payload =
-                static_cast<size_t>(response_[2]) | (static_cast<size_t>(response_[3]) << 8U);
-            if (payload < 2 || 8 + payload > length) {
+            const size_t payload = static_cast<size_t>(response_[2]) |
+                                   (static_cast<size_t>(response_[3]) << 8U);
+            if(payload < 2 || 8 + payload > length) {
                 continue;
             }
             // The last two payload bytes are the status and the error; status 0 is success.
-            if (response_[8 + payload - 2] != 0) {
+            if(response_[8 + payload - 2] != 0) {
                 return false;
             }
-            if (value != nullptr) {
+            if(value != nullptr) {
                 *value = detail::readU32(response_ + 4);
             }
-            if (respData != nullptr) {
+            if(respData != nullptr) {
                 // Clamp to the caller's buffer: payload is bounded only by the 64-byte frame, so a
                 // malformed or noisy response could otherwise copy past a smaller respData.
                 const size_t bytes = payload - 2 < respCap ? payload - 2 : respCap;
                 memcpy(respData, response_ + 8, bytes);
-                if (respLength != nullptr) {
+                if(respLength != nullptr) {
                     *respLength = bytes;
                 }
             }
@@ -366,12 +418,12 @@ private:
     void slipWrite(const uint8_t* data, size_t size) {
         size_t length = 0;
         frame_[length++] = slipEnd;
-        for (size_t index = 0; index < size; ++index) {
+        for(size_t index = 0; index < size; ++index) {
             const uint8_t byte = data[index];
-            if (byte == slipEnd) {
+            if(byte == slipEnd) {
                 frame_[length++] = slipEsc;
                 frame_[length++] = slipEscEnd;
-            } else if (byte == slipEsc) {
+            } else if(byte == slipEsc) {
                 frame_[length++] = slipEsc;
                 frame_[length++] = slipEscEsc;
             } else {
@@ -385,30 +437,30 @@ private:
     bool slipRead(uint32_t timeoutMs, size_t& length) {
         uint8_t byte = 0;
         do {
-            if (!io_.readByte(io_.context, &byte, timeoutMs)) {
+            if(!io_.readByte(io_.context, &byte, timeoutMs)) {
                 return false;
             }
-        } while (byte != slipEnd);
+        } while(byte != slipEnd);
         length = 0;
-        for (;;) {
-            if (!io_.readByte(io_.context, &byte, timeoutMs)) {
+        for(;;) {
+            if(!io_.readByte(io_.context, &byte, timeoutMs)) {
                 return false;
             }
-            if (byte == slipEnd) {
-                if (length == 0) {
+            if(byte == slipEnd) {
+                if(length == 0) {
                     continue; // A leading delimiter or an empty frame: keep reading.
                 }
                 return true;
             }
-            if (byte == slipEsc) {
-                if (!io_.readByte(io_.context, &byte, timeoutMs)) {
+            if(byte == slipEsc) {
+                if(!io_.readByte(io_.context, &byte, timeoutMs)) {
                     return false;
                 }
-                byte = byte == slipEscEnd   ? static_cast<uint8_t>(slipEnd)
-                       : byte == slipEscEsc ? static_cast<uint8_t>(slipEsc)
-                                            : byte;
+                byte = byte == slipEscEnd ? static_cast<uint8_t>(slipEnd) :
+                       byte == slipEscEsc ? static_cast<uint8_t>(slipEsc) :
+                                            byte;
             }
-            if (length >= sizeof(response_)) {
+            if(length >= sizeof(response_)) {
                 return false;
             }
             response_[length++] = byte;

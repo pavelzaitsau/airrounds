@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_CAPTURE_PATH_H
+#define AIRROUNDS_SHARED_CAPTURE_PATH_H
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -19,3 +20,4 @@ inline bool capturePath(char* path, size_t size, const char* directory, const Ca
 
 } // namespace uart
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_CAPTURE_PATH_H

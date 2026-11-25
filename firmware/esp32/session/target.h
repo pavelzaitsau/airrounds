@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_TARGET_H
+#define AIRROUNDS_SHARED_TARGET_H
 
 #include <numeric>
 #include <stddef.h>
@@ -80,3 +81,4 @@ private:
 
 } // namespace session
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_TARGET_H

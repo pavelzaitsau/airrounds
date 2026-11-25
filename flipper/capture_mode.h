@@ -9,7 +9,11 @@ namespace flipper {
 // How a mode counts a point as a success. A frame-found mode succeeds on a saved capture; an
 // absence mode succeeds when the board confirms that the frames were absent. The neutral entry
 // for an unknown mode counts both as success.
-enum class SuccessMeaning : uint8_t { packet_found, absence_confirmed, any_result };
+enum class SuccessMeaning : uint8_t {
+    packet_found,
+    absence_confirmed,
+    any_result
+};
 
 struct CaptureModeInfo {
     const char* name;
@@ -25,7 +29,7 @@ struct CaptureModeInfo {
     const char* detailMiss;
     SuccessMeaning meaning;
     uint8_t wireId; // Two hex digits once the board reports modes; Beacon is 00.
-    bool implied;   // Available on every board, also one without the capture-mode capability.
+    bool implied; // Available on every board, also one without the capture-mode capability.
     bool implemented;
 };
 
@@ -36,8 +40,8 @@ struct BoardModes {
     uint8_t ids[8]{};
 
     bool lists(uint8_t id) const {
-        for (size_t index = 0; index < count && index < sizeof(ids); ++index) {
-            if (ids[index] == id) {
+        for(size_t index = 0; index < count && index < sizeof(ids); ++index) {
+            if(ids[index] == id) {
                 return true;
             }
         }
@@ -50,23 +54,71 @@ struct BoardModes {
 // offers it (implied = false), and only the opt-in active build lists 02, so on a default board the
 // active row shows Soon.
 constexpr CaptureModeInfo captureModes[]{
-    {"Beacon", "Beacons", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u", "Captured",
-     "Not seen", "Captured to board SD", "Point not seen", SuccessMeaning::packet_found, 0x00, true,
+    {"Beacon",
+     "Beacons",
+     "Saved",
+     "Not seen",
+     "Listening",
+     "Saving",
+     "Captured %u/%u",
+     "Captured",
+     "Not seen",
+     "Captured to board SD",
+     "Point not seen",
+     SuccessMeaning::packet_found,
+     0x00,
+     true,
      true},
-    {"EAPOL", "Handshakes", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u",
-     "Captured", "Not seen", "Handshake to board SD", "No handshake", SuccessMeaning::packet_found,
-     0x01, false, true},
-    {"Deauth", "Handshakes", "Saved", "Not seen", "Listening", "Saving", "Captured %u/%u",
-     "Captured", "Not seen", "Handshake to board SD", "No handshake", SuccessMeaning::packet_found,
-     0x02, false, true},
+    {"EAPOL",
+     "Handshakes",
+     "Saved",
+     "Not seen",
+     "Listening",
+     "Saving",
+     "Captured %u/%u",
+     "Captured",
+     "Not seen",
+     "Handshake to board SD",
+     "No handshake",
+     SuccessMeaning::packet_found,
+     0x01,
+     false,
+     true},
+    {"Deauth",
+     "Handshakes",
+     "Saved",
+     "Not seen",
+     "Listening",
+     "Saving",
+     "Captured %u/%u",
+     "Captured",
+     "Not seen",
+     "Handshake to board SD",
+     "No handshake",
+     SuccessMeaning::packet_found,
+     0x02,
+     false,
+     true},
 };
 constexpr size_t captureModeCount = sizeof(captureModes) / sizeof(captureModes[0]);
 constexpr size_t beaconModeIndex = 0;
 
 constexpr CaptureModeInfo neutralMode{
-    "Unknown",    "Points", "Done",      "No result", "Listening", "Saving",
-    "Done %u/%u", "Done",   "No result", "Done",      "No result", SuccessMeaning::any_result,
-    0xff,         false,    false};
+    "Unknown",
+    "Points",
+    "Done",
+    "No result",
+    "Listening",
+    "Saving",
+    "Done %u/%u",
+    "Done",
+    "No result",
+    "Done",
+    "No result",
+    SuccessMeaning::any_result,
+    0xff,
+    false,
+    false};
 
 inline const CaptureModeInfo& beaconMode() {
     return captureModes[beaconModeIndex];
@@ -80,9 +132,9 @@ inline bool modeAvailable(const CaptureModeInfo& mode, const BoardModes& board) 
 // app does not know gets the neutral labels.
 inline const CaptureModeInfo& modeOf(uint8_t reportedWireId) {
     // The Flipper app uses no C++ standard library algorithms.
-    for (const auto& mode : captureModes) {
+    for(const auto& mode : captureModes) {
         // cppcheck-suppress useStlAlgorithm
-        if (mode.wireId == reportedWireId) {
+        if(mode.wireId == reportedWireId) {
             return mode;
         }
     }

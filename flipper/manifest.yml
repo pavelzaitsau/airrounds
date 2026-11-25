@@ -2,15 +2,16 @@ sourcecode:
   type: git
   location:
     origin: https://github.com/pavelzaitsau/airrounds.git
-    commit_sha: 18cb5ae779332daed31c73519d17934f5553bf2c
+    commit_sha: 832689bfe01a61175510c8130288596f3dd2b72e
     subdir: flipper
 
 short_description: Passive, receive-only Wi-Fi capture for the ESP32-S2 Devboard.
 
-description: "@README.md"
+description: "@docs/README.md"
 
 changelog: |
   ## 0.2
+  - Package the app for the Flipper application catalog.
   - Show the capture type on the capture screen.
   - Accept every hashcat message pair in the EAPOL check.
 

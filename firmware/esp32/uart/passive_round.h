@@ -1,4 +1,5 @@
-#pragma once
+#ifndef AIRROUNDS_SHARED_PASSIVE_ROUND_H
+#define AIRROUNDS_SHARED_PASSIVE_ROUND_H
 
 #include "uart_reply.h"
 
@@ -295,3 +296,4 @@ private:
 
 } // namespace uart
 } // namespace airrounds
+#endif // AIRROUNDS_SHARED_PASSIVE_ROUND_H

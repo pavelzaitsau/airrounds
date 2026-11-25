@@ -26,28 +26,30 @@ public:
     bool push(TimedByte byte) {
         const bool withinFrame = receiving_ && byte.timeMs - lastByte_ < timeoutMs;
         lastByte_ = byte.timeMs;
-        if (byte.value == '@') {
+        if(byte.value == '@') {
             size_ = 0;
             receiving_ = true;
             return false;
         }
-        if (!withinFrame) {
+        if(!withinFrame) {
             receiving_ = false;
             return false;
         }
-        if (byte.value == '\n') {
+        if(byte.value == '\n') {
             receiving_ = false;
             line_[size_] = '\0';
             return true;
         }
         receiving_ = size_ < sizeof(line_) - 1 && byte.value >= ' ' && byte.value <= '~';
-        if (receiving_) {
+        if(receiving_) {
             line_[size_++] = static_cast<char>(byte.value);
         }
         return false;
     }
 
-    const char* body() const { return line_; }
+    const char* body() const {
+        return line_;
+    }
 
 private:
     static constexpr uint32_t timeoutMs = 100;
@@ -66,15 +68,15 @@ struct Field {
     }
 
     bool hex(size_t width, uint64_t& value) const {
-        if (size != width) {
+        if(size != width) {
             return false;
         }
         uint64_t parsed = 0;
-        for (size_t index = 0; index < size; ++index) {
+        for(size_t index = 0; index < size; ++index) {
             const char digit = data[index];
-            if (digit >= '0' && digit <= '9') {
+            if(digit >= '0' && digit <= '9') {
                 parsed = (parsed << 4U) | static_cast<uint64_t>(digit - '0');
-            } else if (digit >= 'a' && digit <= 'f') {
+            } else if(digit >= 'a' && digit <= 'f') {
                 parsed = (parsed << 4U) | static_cast<uint64_t>(digit - 'a' + 10);
             } else {
                 return false;
@@ -87,20 +89,24 @@ struct Field {
 
 class Fields {
 public:
-    explicit Fields(const char* line) : next_(line) {}
+    explicit Fields(const char* line)
+        : next_(line) {
+    }
 
     Field take() {
-        if (atEnd()) {
+        if(atEnd()) {
             return {"", 0};
         }
         const char* start = next_;
         const char* separator = strchr(start, ' ');
         next_ = separator == nullptr ? nullptr : separator + 1;
-        return {start,
-                separator == nullptr ? strlen(start) : static_cast<size_t>(separator - start)};
+        return {
+            start, separator == nullptr ? strlen(start) : static_cast<size_t>(separator - start)};
     }
 
-    bool atEnd() const { return next_ == nullptr; }
+    bool atEnd() const {
+        return next_ == nullptr;
+    }
 
 private:
     const char* next_;

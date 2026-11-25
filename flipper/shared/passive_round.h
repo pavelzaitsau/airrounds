@@ -35,10 +35,20 @@ struct RoundBudget {
 
 struct SessionReport {
     SessionReport() = default;
-    SessionReport(const VisitId& visit, const RoundStatus& results, const RoundBudget& timeBudget,
-                  uint64_t ended, State finalState, Outcome finalOutcome)
-        : id(visit), status(results), budget(timeBudget), endedUs(ended), state(finalState),
-          outcome(finalOutcome) {}
+    SessionReport(
+        const VisitId& visit,
+        const RoundStatus& results,
+        const RoundBudget& timeBudget,
+        uint64_t ended,
+        State finalState,
+        Outcome finalOutcome)
+        : id(visit)
+        , status(results)
+        , budget(timeBudget)
+        , endedUs(ended)
+        , state(finalState)
+        , outcome(finalOutcome) {
+    }
 
     VisitId id{};
     RoundStatus status{};
@@ -59,7 +69,11 @@ struct VisitBudget {
     }
 };
 
-enum class VisitStart { listening, deadline, radio_error };
+enum class VisitStart {
+    listening,
+    deadline,
+    radio_error
+};
 
 class VisitBackend {
 public:
@@ -67,35 +81,54 @@ public:
     virtual uint64_t nowUs() const = 0;
     // Points the visit at the capture mode for this round, before beginRound. The default no-op
     // keeps Beacon, so a backend that supports only Beacon needs no override.
-    virtual void selectMode(uint8_t /*modeId*/) {}
+    virtual void selectMode(uint8_t /*modeId*/) {
+    }
     // Seed the round-scoped transmit budget once per round at start. The default ignores it, so a
     // passive-only backend needs no override.
-    virtual void seedTransmitBudget(uint32_t /*frames*/) {}
+    virtual void seedTransmitBudget(uint32_t /*frames*/) {
+    }
     // Give the capture mode time outside the receive callback (step R6). The default does nothing.
-    virtual void pollMode() {}
-    virtual void beginRound(const SessionReport&) {}
+    virtual void pollMode() {
+    }
+    virtual void beginRound(const SessionReport&) {
+    }
     virtual VisitStart start(const session::Target& target, const VisitBudget& budget) = 0;
     virtual bool observationDone() const = 0;
     virtual bool stopReception() = 0;
     virtual void beginSave(const CaptureId& id) = 0;
     virtual Outcome saveResult() const = 0;
-    virtual void beginJournal(const SessionReport&) {}
-    virtual bool journalPending() const { return false; }
-    virtual bool supportsJournal() const { return false; }
-    virtual JournalState journalState() const { return JournalState::none; }
+    virtual void beginJournal(const SessionReport&) {
+    }
+    virtual bool journalPending() const {
+        return false;
+    }
+    virtual bool supportsJournal() const {
+        return false;
+    }
+    virtual JournalState journalState() const {
+        return JournalState::none;
+    }
     // Board self-test and microSD status (feature bit 6). A backend without an override advertises
     // no bit 6, so the protocol answers card and selftest with bad_request.
-    virtual bool supportsSelfTest() const { return false; }
-    virtual bool cardMounted() { return false; }
-    virtual SelfTest runSelfTest() { return {}; }
+    virtual bool supportsSelfTest() const {
+        return false;
+    }
+    virtual bool cardMounted() {
+        return false;
+    }
+    virtual SelfTest runSelfTest() {
+        return {};
+    }
 };
 
 class PassiveRound {
 public:
-    explicit PassiveRound(VisitBackend& visit) : visit_(visit) {}
+    explicit PassiveRound(VisitBackend& visit)
+        : visit_(visit) {
+    }
 
     bool start(const VisitId& id, const session::Profile& profile, uint8_t modeId = beaconModeId) {
-        if (profile.size() == 0 || state_ == State::running || state_ == State::finalizing) {
+        if(profile.size() == 0 || state_ == State::running || state_ == State::finalizing) {
             return false;
         }
         // Select on every start, after the running-round check so a start never switches the mode
@@ -121,47 +154,63 @@ public:
     }
 
     void stop() {
-        if (terminalState_ != State::idle) {
+        if(terminalState_ != State::idle) {
             return;
         }
-        if (state_ == State::running ||
-            (state_ == State::finalizing && current_ + 1 < status_.profile.size())) {
+        if(state_ == State::running ||
+           (state_ == State::finalizing && current_ + 1 < status_.profile.size())) {
             // A stop during a save keeps the current file and skips later visits.
             stopRequested_ = true;
         }
-        if (state_ == State::running) {
+        if(state_ == State::running) {
             observationInterrupted_ = preparing_ || (budget_.remainingAt(visit_.nowUs()) != 0 &&
                                                      !visit_.observationDone());
-            if (!preparing_) {
+            if(!preparing_) {
                 endObservation();
             }
         }
     }
 
     void poll() {
-        if (preparing_) {
+        if(preparing_) {
             advancePreparation();
-        } else if (terminalState_ != State::idle) {
+        } else if(terminalState_ != State::idle) {
             updateJournal();
-        } else if (state_ == State::running) {
-            if (budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone()) {
+        } else if(state_ == State::running) {
+            if(budget_.remainingAt(visit_.nowUs()) == 0 || visit_.observationDone()) {
                 endObservation();
             } else {
                 visit_.pollMode();
             }
-        } else if (state_ == State::finalizing) {
+        } else if(state_ == State::finalizing) {
             updateSaveResult();
         }
     }
 
-    State state() const { return state_; }
-    Outcome outcome() const { return outcome_; }
-    const RoundStatus& status() const { return status_; }
-    bool supportsJournal() const { return visit_.supportsJournal(); }
-    JournalState journalState() const { return visit_.journalState(); }
-    bool supportsSelfTest() const { return visit_.supportsSelfTest(); }
-    bool cardMounted() { return visit_.cardMounted(); }
-    SelfTest runSelfTest() { return visit_.runSelfTest(); }
+    State state() const {
+        return state_;
+    }
+    Outcome outcome() const {
+        return outcome_;
+    }
+    const RoundStatus& status() const {
+        return status_;
+    }
+    bool supportsJournal() const {
+        return visit_.supportsJournal();
+    }
+    JournalState journalState() const {
+        return visit_.journalState();
+    }
+    bool supportsSelfTest() const {
+        return visit_.supportsSelfTest();
+    }
+    bool cardMounted() {
+        return visit_.cardMounted();
+    }
+    SelfTest runSelfTest() {
+        return visit_.runSelfTest();
+    }
 
 private:
     // The point's budget per mode: Beacon allows up to 7 s of listening plus radio setup and
@@ -178,14 +227,15 @@ private:
     }
 
     void advancePreparation() {
-        if (visit_.journalPending()) {
+        if(visit_.journalPending()) {
             return;
         }
         preparing_ = false;
-        if (stopRequested_) {
+        if(stopRequested_) {
             finish(State::stopped, Outcome::not_observed);
-        } else if (budget_.remainingAt(visit_.nowUs()) == 0 ||
-                   (visit_.supportsSelfTest() && !visit_.cardMounted())) {
+        } else if(
+            budget_.remainingAt(visit_.nowUs()) == 0 ||
+            (visit_.supportsSelfTest() && !visit_.cardMounted())) {
             // The deadline passed, or the microSD preflight found no card. A card-capable board
             // checks the mount before it opens the radio, so a card-less round reports
             // storage_error up front, not after it saves nothing; a board without the probe keeps
@@ -198,13 +248,13 @@ private:
 
     void startCurrent() {
         const auto remainingVisits = status_.profile.size() - current_;
-        switch (visit_.start(status_.profile[current_], {budget_, remainingVisits})) {
+        switch(visit_.start(status_.profile[current_], {budget_, remainingVisits})) {
         case VisitStart::listening:
             state_ = State::running;
             outcome_ = Outcome::none;
             break;
         case VisitStart::deadline:
-            if (current_ != 0) {
+            if(current_ != 0) {
                 finish(State::stopped);
             } else {
                 // UART clients expect at least one result in a stopped round.
@@ -217,13 +267,15 @@ private:
         }
     }
 
-    void fail(Outcome result) { finish(State::error, result); }
+    void fail(Outcome result) {
+        finish(State::error, result);
+    }
 
     void finish(State finalState, Outcome point = Outcome::none) {
         const auto result = anySaved_ ? Outcome::saved : Outcome::not_observed;
         const auto finalOutcome = finalState == State::error ? point : result;
         SessionReport report{id_, status_, budget_, visit_.nowUs(), finalState, finalOutcome};
-        if (point != Outcome::none) {
+        if(point != Outcome::none) {
             report.status.results[current_] = point;
         }
         terminalState_ = finalState;
@@ -236,15 +288,15 @@ private:
     }
 
     void updateJournal() {
-        if (visit_.journalPending()) {
+        if(visit_.journalPending()) {
             return;
         }
         // Keep the last point pending while the wire reports finalizing.
-        if (terminalPoint_ != Outcome::none) {
+        if(terminalPoint_ != Outcome::none) {
             status_.results[current_] = terminalPoint_;
         }
-        if (terminalState_ == State::stopped && terminalPoint_ == Outcome::not_observed &&
-            observationInterrupted_) {
+        if(terminalState_ == State::stopped && terminalPoint_ == Outcome::not_observed &&
+           observationInterrupted_) {
             status_.interruption = VisitInterruption::yes;
         }
         state_ = terminalState_;
@@ -253,7 +305,7 @@ private:
     }
 
     void endObservation() {
-        if (!visit_.stopReception()) {
+        if(!visit_.stopReception()) {
             fail(Outcome::radio_error);
             return;
         }
@@ -265,16 +317,16 @@ private:
 
     void updateSaveResult() {
         const Outcome result = visit_.saveResult();
-        if (result == Outcome::none) {
+        if(result == Outcome::none) {
             return;
         }
-        if (result != Outcome::saved && result != Outcome::not_observed) {
+        if(result != Outcome::saved && result != Outcome::not_observed) {
             fail(result);
             return;
         }
         anySaved_ = anySaved_ || result == Outcome::saved;
         const bool moreVisits = current_ + 1 < status_.profile.size();
-        if (!stopRequested_ && moreVisits && budget_.remainingAt(visit_.nowUs()) != 0) {
+        if(!stopRequested_ && moreVisits && budget_.remainingAt(visit_.nowUs()) != 0) {
             status_.results[current_++] = result;
             startCurrent();
             return;

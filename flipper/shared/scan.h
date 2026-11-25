@@ -12,7 +12,12 @@ namespace airrounds {
 namespace uart {
 
 constexpr unsigned scanFeature = 0x08;
-enum class ScanState { idle, running, complete, error };
+enum class ScanState {
+    idle,
+    running,
+    complete,
+    error
+};
 
 inline const char* wireName(ScanState state) {
     static constexpr const char* names[]{"idle", "running", "complete", "error"};
@@ -27,14 +32,22 @@ struct ScanEntry {
 
 class ScanList {
 public:
-    enum : size_t { capacity = 16 };
+    enum : size_t {
+        capacity = 16
+    };
 
-    size_t size() const { return size_; }
-    void clear() { size_ = 0; }
-    const ScanEntry& operator[](size_t index) const { return entries_[index]; }
+    size_t size() const {
+        return size_;
+    }
+    void clear() {
+        size_ = 0;
+    }
+    const ScanEntry& operator[](size_t index) const {
+        return entries_[index];
+    }
 
     bool add(const session::Target& target, const uint8_t* name, size_t length) {
-        if (!validEntry(target, name, length) || size_ == capacity || find(target) != size_) {
+        if(!validEntry(target, name, length) || size_ == capacity || find(target) != size_) {
             return false;
         }
         assign(size_, target, name, length);
@@ -42,29 +55,30 @@ public:
         return true;
     }
 
-    bool observe(const session::Target& target, int8_t signal, const uint8_t* name, size_t length) {
-        if (!validEntry(target, name, length)) {
+    bool
+        observe(const session::Target& target, int8_t signal, const uint8_t* name, size_t length) {
+        if(!validEntry(target, name, length)) {
             return false;
         }
         const auto existing = find(target);
-        if (existing < size_) {
-            if (signal > signals_[existing]) {
+        if(existing < size_) {
+            if(signal > signals_[existing]) {
                 signals_[existing] = signal;
                 entries_[existing].target = target;
             }
-            if (entries_[existing].nameSize == 0 && length != 0) {
+            if(entries_[existing].nameSize == 0 && length != 0) {
                 memcpy(entries_[existing].name, name, length);
                 entries_[existing].nameSize = length;
             }
             return true;
         }
         const auto index = size_ < capacity ? size_ : weakest();
-        if (size_ == capacity && signal <= signals_[index]) {
+        if(size_ == capacity && signal <= signals_[index]) {
             return false;
         }
         assign(index, target, name, length);
         signals_[index] = signal;
-        if (index == size_) {
+        if(index == size_) {
             ++size_;
         }
         return true;
@@ -77,8 +91,8 @@ private:
     }
 
     size_t find(const session::Target& target) const {
-        for (size_t index = 0; index < size_; ++index) {
-            if (session::sameAddress(entries_[index].target, target)) {
+        for(size_t index = 0; index < size_; ++index) {
+            if(session::sameAddress(entries_[index].target, target)) {
                 return index;
             }
         }
@@ -87,8 +101,8 @@ private:
 
     size_t weakest() const {
         size_t index = 0;
-        for (size_t row = 1; row < size_; ++row) {
-            if (signals_[row] < signals_[index]) {
+        for(size_t row = 1; row < size_; ++row) {
+            if(signals_[row] < signals_[index]) {
                 index = row;
             }
         }
@@ -100,7 +114,7 @@ private:
         entry = {};
         entry.target = target;
         entry.nameSize = length;
-        if (length != 0) {
+        if(length != 0) {
             memcpy(entry.name, name, length);
         }
     }
@@ -130,26 +144,26 @@ struct ScanReply {
 inline bool readScanEntry(Fields& fields, ScanEntry& entry) {
     uint64_t address = 0;
     uint64_t channel = 0;
-    if (!fields.take().hex(12, address) || !fields.take().hex(2, channel)) {
+    if(!fields.take().hex(12, address) || !fields.take().hex(2, channel)) {
         return false;
     }
     session::setAddress(entry.target, address);
     entry.target.channel = static_cast<uint8_t>(channel);
     const auto name = fields.take();
-    if (!session::validTarget(entry.target) || !fields.atEnd()) {
+    if(!session::validTarget(entry.target) || !fields.atEnd()) {
         return false;
     }
-    if (name.is("-")) {
+    if(name.is("-")) {
         return true;
     }
-    if (name.size == 0 || name.size % 2 != 0 || name.size / 2 > sizeof(entry.name)) {
+    if(name.size == 0 || name.size % 2 != 0 || name.size / 2 > sizeof(entry.name)) {
         return false;
     }
     entry.nameSize = name.size / 2;
-    for (size_t index = 0; index < entry.nameSize; ++index) {
+    for(size_t index = 0; index < entry.nameSize; ++index) {
         uint64_t byte = 0;
         const Field pair{name.data + 2 * index, 2};
-        if (!pair.hex(2, byte)) {
+        if(!pair.hex(2, byte)) {
             return false;
         }
         entry.name[index] = static_cast<uint8_t>(byte);

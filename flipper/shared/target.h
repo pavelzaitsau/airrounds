@@ -30,12 +30,15 @@ inline bool sameAddress(const Target& first, const Target& second) {
 }
 
 inline uint64_t addressValue(const Target& target) {
-    return std::accumulate(target.bssid, target.bssid + sizeof(target.bssid), uint64_t{0},
-                           [](uint64_t address, uint8_t octet) { return (address << 8U) | octet; });
+    return std::accumulate(
+        target.bssid,
+        target.bssid + sizeof(target.bssid),
+        uint64_t{0},
+        [](uint64_t address, uint8_t octet) { return (address << 8U) | octet; });
 }
 
 inline void setAddress(Target& target, uint64_t address) {
-    for (size_t index = sizeof(target.bssid); index > 0; --index) {
+    for(size_t index = sizeof(target.bssid); index > 0; --index) {
         target.bssid[index - 1] = static_cast<uint8_t>(address);
         address >>= 8U;
     }
@@ -43,17 +46,24 @@ inline void setAddress(Target& target, uint64_t address) {
 
 class Profile {
 public:
-    enum : size_t { legacyCapacity = 3, capacity = 5 };
+    enum : size_t {
+        legacyCapacity = 3,
+        capacity = 5
+    };
 
-    size_t size() const { return size_; }
-    const Target& operator[](size_t index) const { return targets_[index]; }
+    size_t size() const {
+        return size_;
+    }
+    const Target& operator[](size_t index) const {
+        return targets_[index];
+    }
 
     bool add(const Target& target) {
-        if (size_ == capacity || !validTarget(target)) {
+        if(size_ == capacity || !validTarget(target)) {
             return false;
         }
-        for (size_t i = 0; i < size_; ++i) {
-            if (sameAddress(targets_[i], target)) {
+        for(size_t i = 0; i < size_; ++i) {
+            if(sameAddress(targets_[i], target)) {
                 return false;
             }
         }
@@ -62,17 +72,17 @@ public:
     }
 
     void removeLast() {
-        if (size_ > 0) {
+        if(size_ > 0) {
             --size_;
         }
     }
 
     bool matches(const Profile& other) const {
-        if (size_ != other.size_) {
+        if(size_ != other.size_) {
             return false;
         }
-        for (size_t i = 0; i < size_; ++i) {
-            if (targets_[i].channel != other[i].channel || !sameAddress(targets_[i], other[i])) {
+        for(size_t i = 0; i < size_; ++i) {
+            if(targets_[i].channel != other[i].channel || !sameAddress(targets_[i], other[i])) {
                 return false;
             }
         }

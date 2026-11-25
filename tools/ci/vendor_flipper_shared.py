@@ -12,8 +12,11 @@ committed copies diverge from the firmware originals.
 """
 
 import argparse
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,8 +79,28 @@ def closure(seed_paths):
     return reached
 
 
+def clang_format(text, name):
+    """Format a vendored header with flipper/.clang-format.
+
+    The Flipper Apps Catalog builds flipper/ through `ufbt lint`, which formats every header
+    in the bundle, flipper/shared/ included, so the vendored copies must already match that
+    style or the catalog build fails. flipper/.clang-format sets SortIncludes: Never, so the
+    flattened includes keep the order this script gives them.
+    """
+    binary = os.environ.get("CLANG_FORMAT") or shutil.which("clang-format")
+    if not binary:
+        raise SystemExit("clang-format not found; set CLANG_FORMAT or install clang-format")
+    result = subprocess.run(
+        [binary, "--style=file", f"--assume-filename={SHARED / name}"],
+        input=text, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"clang-format failed on {name}: {result.stderr.strip()}")
+    return result.stdout
+
+
 def render(reached):
-    """Return {basename: vendored text} with flattened includes and a banner."""
+    """Return {basename: vendored text} with flattened includes, a banner and catalog formatting."""
     members = {path.resolve(): path.name for path in reached}
     rendered = {}
     for path, text in reached.items():
@@ -88,7 +111,7 @@ def render(reached):
             raise SystemExit(f"{path.name} includes {match.group(1)} outside the shared closure")
         body = QUOTED_INCLUDE.sub(flatten, text)
         rel = path.relative_to(ROOT).as_posix()
-        rendered[path.name] = BANNER.format(source=rel) + "\n" + body
+        rendered[path.name] = clang_format(BANNER.format(source=rel) + "\n" + body, path.name)
     return rendered
 
 

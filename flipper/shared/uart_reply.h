@@ -25,7 +25,14 @@ enum class Code {
     radio_error
 };
 
-enum class State { idle, running, finalizing, complete, stopped, error };
+enum class State {
+    idle,
+    running,
+    finalizing,
+    complete,
+    stopped,
+    error
+};
 // absence_confirmed (digit 5) is a per-point result only round_status_mode carries; the board
 // never sends it in T11. See docs/t11.md, "Client reply parser".
 enum class Outcome {
@@ -37,8 +44,17 @@ enum class Outcome {
     absence_confirmed = 5
 };
 
-enum class JournalState { none, pending, saved, failed };
-enum class VisitInterruption { unknown, no, yes };
+enum class JournalState {
+    none,
+    pending,
+    saved,
+    failed
+};
+enum class VisitInterruption {
+    unknown,
+    no,
+    yes
+};
 constexpr uint8_t sessionJournalFeature = 0x04;
 constexpr uint8_t roundDetailFeature = 0x10;
 constexpr uint8_t captureModeFeature = 0x20; // Bit 5: the board lists capture modes and runs R5.
@@ -47,7 +63,12 @@ constexpr uint8_t selfTestFeature =
 constexpr size_t wireReplyCapacity = 240;
 
 // One self-test check result, one wire character each: pass, fail, blocked, or not run.
-enum class CheckResult { pass, fail, blocked, not_run };
+enum class CheckResult {
+    pass,
+    fail,
+    blocked,
+    not_run
+};
 
 inline char checkChar(CheckResult result) {
     static constexpr char chars[] = "pfb-";
@@ -56,8 +77,8 @@ inline char checkChar(CheckResult result) {
 
 inline bool readCheck(char character, CheckResult& result) {
     static constexpr char chars[] = "pfb-";
-    for (size_t index = 0; index < sizeof(chars) - 1; ++index) {
-        if (chars[index] == character) {
+    for(size_t index = 0; index < sizeof(chars) - 1; ++index) {
+        if(chars[index] == character) {
             result = static_cast<CheckResult>(index);
             return true;
         }
@@ -69,9 +90,16 @@ inline bool readCheck(char character, CheckResult& result) {
 struct SelfTest {
     SelfTest() = default;
     // The four checks share a type; the field order is the wire order.
-    SelfTest(CheckResult sdResult, CheckResult radioResult, CheckResult probeResult,
-             CheckResult writeResult)
-        : sd(sdResult), radio(radioResult), probe(probeResult), write(writeResult) {}
+    SelfTest(
+        CheckResult sdResult,
+        CheckResult radioResult,
+        CheckResult probeResult,
+        CheckResult writeResult)
+        : sd(sdResult)
+        , radio(radioResult)
+        , probe(probeResult)
+        , write(writeResult) {
+    }
 
     CheckResult sd = CheckResult::not_run;
     CheckResult radio = CheckResult::not_run;
@@ -80,49 +108,54 @@ struct SelfTest {
 };
 
 inline const char* wireName(Code code) {
-    static constexpr const char* names[]{"ok",
-                                         "unsupported_version",
-                                         "wrong_boot",
-                                         "bad_request",
-                                         "bad_target",
-                                         "unknown_session",
-                                         "busy",
-                                         "conflict",
-                                         "stale_request",
-                                         "radio_error"};
-    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(Code::radio_error) + 1,
-                  "every code needs a wire name");
+    static constexpr const char* names[]{
+        "ok",
+        "unsupported_version",
+        "wrong_boot",
+        "bad_request",
+        "bad_target",
+        "unknown_session",
+        "busy",
+        "conflict",
+        "stale_request",
+        "radio_error"};
+    static_assert(
+        sizeof(names) / sizeof(names[0]) == static_cast<size_t>(Code::radio_error) + 1,
+        "every code needs a wire name");
     return names[static_cast<size_t>(code)];
 }
 
 inline const char* wireName(State state) {
-    static constexpr const char* names[]{"idle",     "running", "finalizing",
-                                         "complete", "stopped", "error"};
-    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(State::error) + 1,
-                  "every state needs a wire name");
+    static constexpr const char* names[]{
+        "idle", "running", "finalizing", "complete", "stopped", "error"};
+    static_assert(
+        sizeof(names) / sizeof(names[0]) == static_cast<size_t>(State::error) + 1,
+        "every state needs a wire name");
     return names[static_cast<size_t>(state)];
 }
 
 inline const char* wireName(Outcome outcome) {
-    static constexpr const char* names[]{"none",        "not_observed",  "saved",
-                                         "radio_error", "storage_error", "absence_confirmed"};
-    static_assert(sizeof(names) / sizeof(names[0]) ==
-                      static_cast<size_t>(Outcome::absence_confirmed) + 1,
-                  "every outcome needs a wire name");
+    static constexpr const char* names[]{
+        "none", "not_observed", "saved", "radio_error", "storage_error", "absence_confirmed"};
+    static_assert(
+        sizeof(names) / sizeof(names[0]) == static_cast<size_t>(Outcome::absence_confirmed) + 1,
+        "every outcome needs a wire name");
     return names[static_cast<size_t>(outcome)];
 }
 
 inline const char* wireName(JournalState state) {
     static constexpr const char* names[]{"none", "pending", "saved", "failed"};
-    static_assert(sizeof(names) / sizeof(names[0]) == static_cast<size_t>(JournalState::failed) + 1,
-                  "every journal state needs a wire name");
+    static_assert(
+        sizeof(names) / sizeof(names[0]) == static_cast<size_t>(JournalState::failed) + 1,
+        "every journal state needs a wire name");
     return names[static_cast<size_t>(state)];
 }
 
-template <typename Word> bool readWireName(Field field, Word last, Word& value) {
-    for (size_t index = 0; index <= static_cast<size_t>(last); ++index) {
+template <typename Word>
+bool readWireName(Field field, Word last, Word& value) {
+    for(size_t index = 0; index <= static_cast<size_t>(last); ++index) {
         const auto candidate = static_cast<Word>(index);
-        if (field.is(wireName(candidate))) {
+        if(field.is(wireName(candidate))) {
             value = candidate;
             return true;
         }
@@ -148,7 +181,7 @@ struct RoundStatus {
     // The first unfinished slot is the active one while the board is busy.
     size_t next() const {
         size_t index = 0;
-        while (index < profile.size() && results[index] != Outcome::none) {
+        while(index < profile.size() && results[index] != Outcome::none) {
             ++index;
         }
         return index;
@@ -184,12 +217,12 @@ struct Reply {
 
 inline bool readFirmware(Fields& fields, Reply& reply) {
     const auto value = fields.take();
-    if (value.size == 0 || value.size >= sizeof(reply.firmware) || !fields.atEnd()) {
+    if(value.size == 0 || value.size >= sizeof(reply.firmware) || !fields.atEnd()) {
         return false;
     }
-    for (size_t index = 0; index < value.size; ++index) {
+    for(size_t index = 0; index < value.size; ++index) {
         const char character = value.data[index];
-        if (character != '.' && (character < '0' || character > '9')) {
+        if(character != '.' && (character < '0' || character > '9')) {
             return false;
         }
     }
@@ -204,10 +237,10 @@ inline bool readRound(Fields& fields, RoundStatus& round, bool allowAbsence = fa
     // every other reply keeps the digit-4 ceiling.
     const uint64_t ceiling =
         static_cast<uint64_t>(allowAbsence ? Outcome::absence_confirmed : Outcome::storage_error);
-    for (size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
-         ++index) {
+    for(size_t index = round.profile.size(); index < session::Profile::capacity && !fields.atEnd();
+        ++index) {
         const auto entry = fields.take();
-        if (entry.size != 15) {
+        if(entry.size != 15) {
             return false;
         }
         uint64_t address = 0;
@@ -216,13 +249,13 @@ inline bool readRound(Fields& fields, RoundStatus& round, bool allowAbsence = fa
         const Field bssid{entry.data, 12};
         const Field channelField{entry.data + 12, 2};
         const Field resultField{entry.data + 14, 1};
-        if (!bssid.hex(12, address) || !channelField.hex(2, channel) ||
-            !resultField.hex(1, result) || result > ceiling) {
+        if(!bssid.hex(12, address) || !channelField.hex(2, channel) ||
+           !resultField.hex(1, result) || result > ceiling) {
             return false;
         }
         session::Target target{{}, static_cast<uint8_t>(channel)};
         session::setAddress(target, address);
-        if (!round.profile.add(target)) {
+        if(!round.profile.add(target)) {
             return false;
         }
         round.results[index] = static_cast<Outcome>(result);
@@ -233,14 +266,14 @@ inline bool readRound(Fields& fields, RoundStatus& round, bool allowAbsence = fa
 inline bool readScanReply(Fields& fields, ScanReply& scan) {
     uint64_t count = 0;
     uint64_t index = 0;
-    if (!readWireName(fields.take(), ScanState::error, scan.state) ||
-        !fields.take().hex(2, count) || !fields.take().hex(2, index) ||
-        count > ScanList::capacity) {
+    if(!readWireName(fields.take(), ScanState::error, scan.state) ||
+       !fields.take().hex(2, count) || !fields.take().hex(2, index) ||
+       count > ScanList::capacity) {
         return false;
     }
     scan.count = static_cast<size_t>(count);
     scan.index = static_cast<size_t>(index);
-    if (scan.state != ScanState::complete || scan.count == 0) {
+    if(scan.state != ScanState::complete || scan.count == 0) {
         return scan.count == 0 && scan.index == 0 && fields.atEnd();
     }
     return scan.index < scan.count && readScanEntry(fields, scan.entry);
@@ -250,18 +283,18 @@ inline bool readScanReply(Fields& fields, ScanReply& scan) {
 // after. A count above 8, a repeated ID, or a trailing field rejects the reply.
 inline bool readModes(Fields& fields, Reply& reply) {
     uint64_t count = 0;
-    if ((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, count) || count > 8) {
+    if((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, count) || count > 8) {
         return false;
     }
     reply.modeCount = static_cast<uint8_t>(count);
-    for (size_t index = 0; index < reply.modeCount; ++index) {
+    for(size_t index = 0; index < reply.modeCount; ++index) {
         uint64_t id = 0;
-        if (!fields.take().hex(2, id)) {
+        if(!fields.take().hex(2, id)) {
             return false;
         }
         const auto wireId = static_cast<uint8_t>(id);
-        for (size_t earlier = 0; earlier < index; ++earlier) {
-            if (reply.modeIds[earlier] == wireId) {
+        for(size_t earlier = 0; earlier < index; ++earlier) {
+            if(reply.modeIds[earlier] == wireId) {
                 return false;
             }
         }
@@ -275,8 +308,8 @@ inline bool readModes(Fields& fields, Reply& reply) {
 // feature bit 6, and neither carries round fields.
 inline bool readCard(Fields& fields, Reply& reply) {
     uint64_t state = 0;
-    if ((reply.features & selfTestFeature) == 0 || !fields.take().hex(1, state) || state > 1 ||
-        !fields.atEnd()) {
+    if((reply.features & selfTestFeature) == 0 || !fields.take().hex(1, state) || state > 1 ||
+       !fields.atEnd()) {
         return false;
     }
     reply.card = state == 1;
@@ -286,11 +319,11 @@ inline bool readCard(Fields& fields, Reply& reply) {
 
 inline bool readSelfTest(Fields& fields, Reply& reply) {
     const auto value = fields.take();
-    if ((reply.features & selfTestFeature) == 0 || value.size != 4 || !fields.atEnd() ||
-        !readCheck(value.data[0], reply.selfTest.sd) ||
-        !readCheck(value.data[1], reply.selfTest.radio) ||
-        !readCheck(value.data[2], reply.selfTest.probe) ||
-        !readCheck(value.data[3], reply.selfTest.write)) {
+    if((reply.features & selfTestFeature) == 0 || value.size != 4 || !fields.atEnd() ||
+       !readCheck(value.data[0], reply.selfTest.sd) ||
+       !readCheck(value.data[1], reply.selfTest.radio) ||
+       !readCheck(value.data[2], reply.selfTest.probe) ||
+       !readCheck(value.data[3], reply.selfTest.write)) {
         return false;
     }
     reply.hasSelfTest = true;
@@ -298,48 +331,48 @@ inline bool readSelfTest(Fields& fields, Reply& reply) {
 }
 
 inline bool readReplyDetails(Fields& fields, Reply& reply) {
-    if (fields.atEnd()) {
+    if(fields.atEnd()) {
         return true;
     }
     auto marker = fields.take();
-    if (marker.is("firmware")) {
+    if(marker.is("firmware")) {
         return readFirmware(fields, reply);
     }
-    if (marker.is("scan")) {
+    if(marker.is("scan")) {
         reply.hasScan = true;
         return (reply.features & scanFeature) != 0 && readScanReply(fields, reply.scan);
     }
-    if (marker.is("modes")) {
+    if(marker.is("modes")) {
         return readModes(fields, reply);
     }
-    if (marker.is("card")) {
+    if(marker.is("card")) {
         return readCard(fields, reply);
     }
-    if (marker.is("selftest")) {
+    if(marker.is("selftest")) {
         return readSelfTest(fields, reply);
     }
-    if (marker.is("journal")) {
-        if ((reply.features & sessionJournalFeature) == 0 ||
-            !readWireName(fields.take(), JournalState::failed, reply.journal)) {
+    if(marker.is("journal")) {
+        if((reply.features & sessionJournalFeature) == 0 ||
+           !readWireName(fields.take(), JournalState::failed, reply.journal)) {
             return false;
         }
         reply.hasJournal = true;
         marker = fields.take();
     }
-    if (marker.is("interrupted")) {
+    if(marker.is("interrupted")) {
         uint64_t interrupted = 0;
-        if ((reply.features & roundDetailFeature) == 0 || !fields.take().hex(1, interrupted) ||
-            interrupted > 1) {
+        if((reply.features & roundDetailFeature) == 0 || !fields.take().hex(1, interrupted) ||
+           interrupted > 1) {
             return false;
         }
-        reply.round.interruption =
-            interrupted == 1 ? VisitInterruption::yes : VisitInterruption::no;
+        reply.round.interruption = interrupted == 1 ? VisitInterruption::yes :
+                                                      VisitInterruption::no;
         marker = fields.take();
     }
-    if (marker.is("mode")) {
+    if(marker.is("mode")) {
         // round_status_mode inserts mode <id> just before aps, under feature bit 5.
         uint64_t modeId = 0;
-        if ((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, modeId)) {
+        if((reply.features & captureModeFeature) == 0 || !fields.take().hex(2, modeId)) {
             return false;
         }
         reply.mode = static_cast<uint8_t>(modeId);
@@ -356,11 +389,11 @@ inline bool readReplyDetails(Fields& fields, Reply& reply) {
 // Pass one line including its line feed.
 inline bool readReply(const char* line, Reply& reply) {
     const char* marker = strrchr(line, '!');
-    if (marker == nullptr) {
+    if(marker == nullptr) {
         return false;
     }
     const size_t length = strlen(marker);
-    if (length < 2 || length >= wireReplyCapacity || marker[length - 1] != '\n') {
+    if(length < 2 || length >= wireReplyCapacity || marker[length - 1] != '\n') {
         return false;
     }
 
@@ -372,18 +405,18 @@ inline bool readReply(const char* line, Reply& reply) {
     uint64_t session = 0;
     uint64_t featureBits = 0;
     Reply parsed;
-    if (!parsed.envelope.read(fields) ||
-        !readWireName(fields.take(), Code::radio_error, parsed.code) ||
-        !fields.take().hex(8, session) ||
-        !readWireName(fields.take(), State::error, parsed.state) ||
-        !readWireName(fields.take(), Outcome::storage_error, parsed.outcome) ||
-        !fields.take().hex(16, parsed.lastMutation) ||
-        (parsed.lastMutation & readRequestBit) != 0 || !fields.take().hex(2, featureBits)) {
+    if(!parsed.envelope.read(fields) ||
+       !readWireName(fields.take(), Code::radio_error, parsed.code) ||
+       !fields.take().hex(8, session) ||
+       !readWireName(fields.take(), State::error, parsed.state) ||
+       !readWireName(fields.take(), Outcome::storage_error, parsed.outcome) ||
+       !fields.take().hex(16, parsed.lastMutation) ||
+       (parsed.lastMutation & readRequestBit) != 0 || !fields.take().hex(2, featureBits)) {
         return false;
     }
     parsed.session = static_cast<uint32_t>(session);
     parsed.features = static_cast<uint8_t>(featureBits);
-    if (!readReplyDetails(fields, parsed)) {
+    if(!readReplyDetails(fields, parsed)) {
         return false;
     }
     reply = parsed;
@@ -392,9 +425,9 @@ inline bool readReply(const char* line, Reply& reply) {
 
 // A zero expected boot is for hello only.
 inline bool matchesReplyKey(const ReplyKey& reply, const ReplyKey& expected) {
-    const bool bootMatches = expected.boot == 0
-                                 ? expected.scope == 0 && (expected.request & readRequestBit) != 0
-                                 : reply.boot == expected.boot;
+    const bool bootMatches = expected.boot == 0 ?
+                                 expected.scope == 0 && (expected.request & readRequestBit) != 0 :
+                                 reply.boot == expected.boot;
     return reply.boot != 0 && bootMatches && reply.request == expected.request &&
            reply.scope == expected.scope;
 }

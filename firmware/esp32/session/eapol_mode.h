@@ -70,10 +70,10 @@ public:
         if (size < eapol + 7) { // version, type, length, descriptor, and the 2 key-info bytes.
             return false;
         }
-        const auto keyInfo =
-            static_cast<uint16_t>((frame[eapol + 5] << 8U) | frame[eapol + 6]);
+        const auto keyInfo = static_cast<uint16_t>((static_cast<uint32_t>(frame[eapol + 5]) << 8U) |
+                                                   frame[eapol + 6]);
         const uint8_t message = classifyKeyInfo(keyInfo); // 1..4; 0 for group, WPA1 3, or no match.
-        if (message == 0 || size > maxEapolFrameSize) { // Never truncate a record.
+        if (message == 0 || size > maxEapolFrameSize) {   // Never truncate a record.
             return false;
         }
         const size_t slot = message - 1U;
@@ -100,9 +100,9 @@ public:
     }
 
     // True when the held frames form a set an attacker could use offline: messages 1 and 2 from one
-    // client, messages 3 and 4 from one client, or a message 1 that carries a PMKID. The active mode
-    // finishes a visit early on this, so a round of several networks moves on once a network yields a
-    // crackable capture. The passive mode does not call it.
+    // client, messages 3 and 4 from one client, or a message 1 that carries a PMKID. The active
+    // mode finishes a visit early on this, so a round of several networks moves on once a network
+    // yields a crackable capture. The passive mode does not call it.
     bool hasCrackableSet() const {
         constexpr uint8_t pair12 = (1U << 0U) | (1U << 1U);
         constexpr uint8_t pair34 = (1U << 2U) | (1U << 3U);
@@ -115,7 +115,9 @@ public:
         return (held_ & (1U << 0U)) != 0 && hasPmkidKde(frames_[0], sizes_[0]);
     }
 
-    ModeResult finish() override { return held_ != 0 ? ModeResult::found : ModeResult::not_observed; }
+    ModeResult finish() override {
+        return held_ != 0 ? ModeResult::found : ModeResult::not_observed;
+    }
 
     size_t recordCount() const override {
         size_t count = 0;

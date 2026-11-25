@@ -2,8 +2,10 @@
 
 This plan covers passive diagnostics through T11. Phase T12 adds the first
 active mode, in a separate opt-in build; the default build stays receive-only.
-See [T12](t12.md). Both toolchains are installed and produced test `.bin` and
-`.fap` files. See the [T0 report](t0.md) for the results and open checks.
+See [T12](t12.md). Phase T13 adds Flipper-driven board flashing, a board
+self-test, a microSD gate, and a CI release. See [T13](t13.md). Both toolchains
+are installed and produced test `.bin` and `.fap` files. See the
+[T0 report](t0.md) for the results and open checks.
 
 ## Bench and first release
 
@@ -123,6 +125,7 @@ the limits and what happens when a visit uses its time.
 | [T10: Capture modes](t10.md) | T9 | Closed. Add the **Capture mode** choice with Beacon and two reserved placeholders. Move Beacon behind a mode contract in the firmware and the app, with per-mode frame types and frame chains; see the [design](capture-modes-design.md). Reserve the protocol fields in documentation only. Any future mode stays within the four limits in [acceptable use](acceptable-use.md#capture-modes-in-scope). Acceptance: the requirement, the mockup with its own test, the design, Beacon unchanged in the existing host tests and on hardware, and the menu checks in the UI emulator. |
 | [T11: EAPOL capture](t11.md) | T10 | Built on the host. The reserved Todo A placeholder is now an EAPOL mode that records the WPA 4-way handshake frames for the round's target; see the [spec](t11.md). The mode runs under the four limits in [acceptable use](acceptable-use.md#capture-modes-in-scope) and adds no transmission. The parser is clean-room. Protocol step R5 runs on the board and in the app, with the writer EAPOL gate, the journal fix with format v3, a 60 s budget per EAPOL point, and the receive-only source check. The version is 0.2. `make check`, `make asan`, `make tsan`, and `make embedded` pass within every memory limit. The WPA2-PSK bench is the open item: no device is available yet; see the [acceptance report](t11.md#acceptance-report). |
 | [T12: Active EAPOL capture](t12.md) | T11 | The opt-in active mode: a targeted unicast deauthentication forces a client rejoin, then the mode captures the EAPOL handshake. The transmit path compiles only into a separate opt-in build; the default build stays provably receive-only. Built in steps A1 to A6, with the transmit audit; the host gates pass. The WPA2-PSK bench is the open item; see the [acceptance status](t12.md#acceptance-status). |
+| [T13: Board flashing and CI](t13.md) | T12 | The Flipper flashes and tests the Devboard on its own, and a CI release bundles the `.fap` with the Devboard image. The Flipper enters the ESP32-S2 ROM bootloader over UART and writes the image from the Flipper card. **Test board** runs a full self-test; a microSD gate blocks capture without a card. The public release flashes the passive receive-only image; the active transmit image builds only with the opt-in `-DAIRROUNDS_ACTIVE=1` flag, off in public builds. Requirements only; see [T13](t13.md). |
 
 ## Bench checks and handoff
 

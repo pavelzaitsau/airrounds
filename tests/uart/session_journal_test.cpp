@@ -501,8 +501,8 @@ void testFullFivePointJournal(const char* directory) {
         const bool added = report.status.profile.add(target);
         assert(added);
         report.status.results[index] = Outcome::saved;
-        stats[index] = {UINT64_MAX, UINT64_MAX, UINT32_MAX, UINT32_MAX,
-                        UINT32_MAX, UINT64_MAX, SIZE_MAX,   0,          0, {}};
+        stats[index] = {UINT64_MAX, UINT64_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                        UINT64_MAX, SIZE_MAX,   0,          0,          {}};
     }
     const JournalBuild build{"0123456789abcdef", "0123456789abcdef0123456789abcdef01234567"};
     const bool written = writeSessionJournal(directory, report, stats, build);
@@ -536,7 +536,8 @@ void testEapolJournal(const char* directory) {
     const auto body = contents(std::string(directory) + "/session-0000000000001234-00000014.log");
     assert(body.find("format=airrounds-session-v3\n") != std::string::npos);
     assert(body.find(" radio=passive mode=eapol\n") != std::string::npos);
-    assert(body.find(" observed_frames=5 accepted_frames=1 filtered_frames=4 ") != std::string::npos);
+    assert(body.find(" observed_frames=5 accepted_frames=1 filtered_frames=4 ") !=
+           std::string::npos);
 }
 
 // The test writes fixed file names, so it needs a fresh directory of its own.

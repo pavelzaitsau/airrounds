@@ -89,23 +89,23 @@ inline bool isEapolKeyFrame(const uint8_t* frame, size_t size) {
 
 // True when an EAPOL-Key frame carries a PMKID in its Key Data, as a KDE with the OUI 00-0F-AC and
 // data type 4 (IEEE 802.11-2020, Table 12-9). A message 1 that carries a PMKID allows an offline
-// attempt without a full 4-way handshake, so it is a crackable set on its own. Reads a frame without
-// its FCS; every size check precedes its read. Clean-room from the standard.
+// attempt without a full 4-way handshake, so it is a crackable set on its own. Reads a frame
+// without its FCS; every size check precedes its read. Clean-room from the standard.
 inline bool hasPmkidKde(const uint8_t* frame, size_t size) {
     if (frame == nullptr || size < eapolBaseHeaderLen) {
         return false;
     }
     const size_t body = eapolHeaderLen(frame) + llcSnapLen + 4; // After the 4-byte EAPOL header.
-    // The fixed EAPOL-Key fields before Key Data, with a 16-byte Key MIC. This holds for the WPA2 AKMs
-    // the tool targets; a WPA3 or Suite-B MIC length would shift Key Data, so the check stays in
-    // bounds but is only meaningful for WPA2. See docs/t12.md.
+    // The fixed EAPOL-Key fields before Key Data, with a 16-byte Key MIC. This holds for the WPA2
+    // AKMs the tool targets; a WPA3 or Suite-B MIC length would shift Key Data, so the check stays
+    // in bounds but is only meaningful for WPA2. See docs/t12.md.
     constexpr size_t fixedKeyFields = 95;
     if (size < body + fixedKeyFields) {
         return false;
     }
     // Key Data Length is the last 2 bytes of the fixed fields, big-endian; Key Data follows.
     const uint16_t keyDataLen =
-        static_cast<uint16_t>((frame[body + 93] << 8U) | frame[body + 94]);
+        static_cast<uint16_t>((static_cast<uint32_t>(frame[body + 93]) << 8U) | frame[body + 94]);
     const size_t keyData = body + fixedKeyFields;
     if (keyDataLen == 0 || size < keyData + keyDataLen) {
         return false;

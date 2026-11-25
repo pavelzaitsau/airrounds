@@ -242,15 +242,58 @@ class CheckPcapTest(unittest.TestCase):
     def test_eapol_complete_handshake_succeeds(self):
         result = self.run_eapol(eapol_capture([1, 2, 3, 4]), 0)
         self.assertTrue(result.stdout.startswith("EAPOL:"), result.stdout)
-        self.assertIn("client 1: messages 1, 2, 3, 4", result.stdout)
+        self.assertIn("client 1: messages 1, 2, 3, 4; pairs M1+M2, M1+M4, M2+M3, M3+M4",
+                      result.stdout)
 
-    def test_eapol_without_the_join_exits_three(self):
-        result = self.run_eapol(eapol_capture([1, 2]), 3)
-        self.assertIn("no completed handshake", result.stderr)
+    def test_eapol_crackable_pairs_each_succeed(self):
+        # Every valid hashcat MESSAGE_PAIR from one client is a success: an ANonce frame (1 or 3)
+        # with a SNonce-and-MIC frame (2 or 4).
+        for messages, pair in (([1, 2], "M1+M2"), ([1, 4], "M1+M4"),
+                               ([2, 3], "M2+M3"), ([3, 4], "M3+M4")):
+            with self.subTest(pair=pair):
+                result = self.run_eapol(eapol_capture(messages), 0)
+                self.assertIn(f"pairs {pair}", result.stdout)
 
-    def test_eapol_cross_client_pair_is_not_a_join(self):
-        # Message 3 to one client and message 4 from another are not a completed handshake.
-        self.run_eapol(eapol_capture([3, 4], clients=[CLIENT, CLIENT_TWO]), 3)
+    def test_eapol_lone_message_has_no_pair(self):
+        # A single message for the target holds no pair, so the capture is not crackable.
+        result = self.run_eapol(eapol_capture([1]), 3)
+        self.assertIn("no crackable pair", result.stderr)
+        self.assertNotIn("pairs", result.stdout)
+
+    def test_eapol_two_frames_of_one_role_are_no_pair(self):
+        # M1+M3 are two ANonce frames; M2+M4 are two SNonce-and-MIC frames. Neither is a pair.
+        for messages in ([1, 3], [2, 4]):
+            with self.subTest(messages=messages):
+                result = self.run_eapol(eapol_capture(messages), 3)
+                self.assertIn("no crackable pair", result.stderr)
+                self.assertNotIn("pairs", result.stdout)
+
+    def test_eapol_repeated_message_is_deduplicated(self):
+        # messages is a set, so a repeated record collapses: two M2 hold no pair, M1 then two M2 do.
+        lone = self.run_eapol(eapol_capture([2, 2]), 3)
+        self.assertIn("client 1: messages 2\n", lone.stdout + "\n")
+        self.assertIn("no crackable pair", lone.stderr)
+        paired = self.run_eapol(eapol_capture([1, 2, 2]), 0)
+        self.assertIn("client 1: messages 1, 2; pairs M1+M2", paired.stdout)
+
+    def test_eapol_reports_every_pair_in_order(self):
+        # A client holding messages 2, 3, 4 yields two overlapping pairs, listed in message order.
+        result = self.run_eapol(eapol_capture([2, 3, 4]), 0)
+        self.assertIn("client 1: messages 2, 3, 4; pairs M2+M3, M3+M4", result.stdout)
+
+    def test_eapol_cross_client_pair_is_not_crackable(self):
+        # Message 3 to one client and message 4 from another are not a pair from one client.
+        result = self.run_eapol(eapol_capture([3, 4], clients=[CLIENT, CLIENT_TWO]), 3)
+        self.assertIn("no crackable pair", result.stderr)
+        self.assertNotIn("pairs", result.stdout)
+
+    def test_eapol_pairs_are_grouped_per_client(self):
+        # One client holds a pair, another a lone message; only the first reports a pair.
+        result = self.run_eapol(eapol_capture([1, 2, 3], clients=[CLIENT, CLIENT, CLIENT_TWO]), 0)
+        self.assertIn("client 1: messages 1, 2; pairs M1+M2", result.stdout)
+        self.assertIn("client 2: messages 3", result.stdout)
+        client_two_line = next(line for line in result.stdout.splitlines() if line.startswith("client 2:"))
+        self.assertNotIn("pairs", client_two_line)
 
     def test_eapol_rejects_a_non_eapol_record(self):
         result = self.run_eapol(header() + record(frame=BEACON), 1)

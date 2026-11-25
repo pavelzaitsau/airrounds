@@ -2,6 +2,7 @@
 name: markdown-formatting
 description: "Format Markdown so it renders the same everywhere and passes a linter: heading levels, blank lines around every block, list markers and nesting, fenced code with a language, links, and tables. Use this skill whenever you write or edit a .md file, review someone else's Markdown, fix a document that renders wrong, or build a table by hand. Trigger it even when the user only says 'write the README', 'fix this doc' or 'add a table' without naming Markdown. Do NOT use it for the wording itself, which belongs to the technical-writing skill, or for rendering Markdown to another format."
 license: MIT-0
+compatibility: "markdownlint-cli2 for the optional gate; no dependency for the rules themselves"
 ---
 
 # Markdown formatting
@@ -142,8 +143,6 @@ Wrapping is a project decision, and this skill does not impose one. Where prose 
 A half-enforced rule trains everyone to ignore the linter.
 
 ## The gate
-
-Use `markdownlint-cli2` to run the optional gate.
 
 `assets/.markdownlint.jsonc` carries these rules as configuration, and `assets/.markdownlint-cli2.jsonc` adds the one custom rule beside them. Run both with:
 

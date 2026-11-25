@@ -2,11 +2,10 @@
 name: docs-linter
 description: "Set up and tune a Vale style gate for a documentation set: install, pre-commit and CI wiring, ready rule files for hedging, filler, vague obligation and abbreviations, and the config traps that cost an afternoon each. Use this skill whenever documentation style needs enforcing rather than advising - adding the linter to a repository, writing or tuning a rule, or working out why a rule fired or stayed silent. Trigger it when someone asks to 'check the docs automatically', 'stop people writing X' or 'add a style check to CI'. Do NOT use it for the writing rules themselves, which live in technical-writing, or for Markdown structure, which is markdown-formatting."
 license: MIT-0
+compatibility: "Vale on PATH (brew install vale); the rule files and traps need Vale 3.x, whose vocabulary layout is `styles/config/vocabularies/`"
 ---
 
 # Docs style gate
-
-Use Vale 3.x. Install it with `brew install vale`.
 
 A convention nobody checks decays within a quarter. Everything a linter can express belongs to the linter, and stops being prose.
 
